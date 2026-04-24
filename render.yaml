@@ -55,7 +55,7 @@ services:
 # ---------------------------------------------------------------
 databases:
   - name: primi-motors-db
-    plan: starter                    # 1 GB, backups diarios, sin expiración
+    plan: basic-256mb                # $6/mes, 256 MB RAM, 1 GB storage, backups diarios
     databaseName: primi_motors       # nombre de la DB dentro del cluster
     user: primi                      # usuario master
     region: oregon                   # misma región que el web service (latencia mínima)
