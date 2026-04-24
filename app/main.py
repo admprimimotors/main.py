@@ -92,7 +92,8 @@ def login_form(request: Request):
     """Form de login. Si ya está logueado, redirige a la home."""
     if auth.current_user(request):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    # Starlette ≥0.29: request va como primer arg posicional, no en el context.
+    return templates.TemplateResponse(request, "login.html", {"error": None})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -106,8 +107,9 @@ def login_submit(
         auth.login_session(request, user)
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(
+        request,
         "login.html",
-        {"request": request, "error": "Usuario o contraseña incorrectos."},
+        {"error": "Usuario o contraseña incorrectos."},
         status_code=401,
     )
 
