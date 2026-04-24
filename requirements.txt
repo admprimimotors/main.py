@@ -13,6 +13,8 @@ APScheduler>=3.10.4
 
 # Base de datos
 SQLAlchemy>=2.0.25
+# Driver Postgres (wheels pre-compilados, no necesita libpq instalado)
+psycopg2-binary>=2.9.9
 
 # PDFs (remitos y notas de crédito)
 reportlab>=4.0.9

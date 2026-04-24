@@ -131,9 +131,29 @@ def require_user(request: Request) -> str:
 # ---------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import getpass
     import sys
-    if len(sys.argv) >= 3 and sys.argv[1] == "hash":
-        print(hash_password(sys.argv[2]))
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "hash":
+        # Modo interactivo seguro: no queda en historial ni se ve al tipear.
+        if len(sys.argv) >= 3:
+            # Para scripts automatizados (menos seguro, password en argv).
+            pwd = sys.argv[2]
+        else:
+            pwd = getpass.getpass("Password nueva (no se muestra): ")
+            pwd2 = getpass.getpass("Repetir para confirmar: ")
+            if pwd != pwd2:
+                print("✗ Las passwords no coinciden.", file=sys.stderr)
+                sys.exit(1)
+            if len(pwd) < 8:
+                print("✗ Password muy corta (mínimo 8 caracteres).", file=sys.stderr)
+                sys.exit(1)
+        print()
+        print("Pegá este valor en Render → Environment → ADMIN_PASSWORD_HASH:")
+        print()
+        print(hash_password(pwd))
+        print()
     else:
-        print("Uso: python -m app.auth hash <password>", file=sys.stderr)
+        print("Uso: python -m app.auth hash           (interactivo, recomendado)", file=sys.stderr)
+        print("     python -m app.auth hash <password>  (argumento, NO recomendado)", file=sys.stderr)
         sys.exit(2)

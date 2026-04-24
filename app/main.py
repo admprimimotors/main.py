@@ -24,10 +24,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth
+from . import auth, database
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -80,7 +80,28 @@ def status() -> JSONResponse:
         "env": os.environ.get("RENDER_SERVICE_NAME", "local"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "auth_configured": bool(os.environ.get("ADMIN_USER") and os.environ.get("ADMIN_PASSWORD_HASH")),
+        "db_configured": bool(os.environ.get("DATABASE_URL")),
+        "db_connected": database.ping(),
     })
+
+
+# ===============================================================
+# Startup: crear tablas si no existen
+# ===============================================================
+
+@app.on_event("startup")
+def _startup() -> None:
+    """
+    Al arrancar, si hay DB configurada, aseguramos que las tablas existan.
+    Cuando tengamos modelos reales, init_db() los creará acá.
+    Idempotente: no rompe si ya están creadas.
+    """
+    try:
+        database.init_db()
+    except Exception as e:
+        # No hacemos crash del proceso por un error de DB al arranque —
+        # preferimos que /health siga OK y ver el problema en /status.
+        print(f"[startup] init_db falló: {e}")
 
 
 # ===============================================================

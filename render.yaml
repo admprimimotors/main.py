@@ -17,7 +17,7 @@ services:
   - type: web
     name: primi-motors-backend
     runtime: python
-    plan: free                       # arrancamos en free; subimos a starter cuando haga falta
+    plan: starter                    # ya pagado — sin cold starts
     region: oregon                   # cualquier región sirve mientras sea consistente
     branch: main
     autoDeploy: true                 # cada push a main redeploya
@@ -40,10 +40,23 @@ services:
         sync: false
       - key: ADMIN_PASSWORD_HASH
         sync: false
+      # Sesión firmada (si no está, se genera efímera en cada reinicio)
+      - key: SESSION_SECRET
+        sync: false
+      # Conexión a la DB — Render la inyecta automáticamente desde el bloque
+      # `databases:` de abajo. Nosotros no la tocamos a mano.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: primi-motors-db
+          property: connectionString
 
-# Cuando migremos a Postgres, sumar acá:
-# databases:
-#   - name: primi-motors-db
-#     plan: free
-#     databaseName: primi_motors
-#     user: primi
+# ---------------------------------------------------------------
+# Postgres
+# ---------------------------------------------------------------
+databases:
+  - name: primi-motors-db
+    plan: starter                    # 1 GB, backups diarios, sin expiración
+    databaseName: primi_motors       # nombre de la DB dentro del cluster
+    user: primi                      # usuario master
+    region: oregon                   # misma región que el web service (latencia mínima)
+    postgresMajorVersion: "16"
