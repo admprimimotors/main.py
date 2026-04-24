@@ -3,27 +3,13 @@ app/main.py
 ===========
 FastAPI — backend web de Primi Motors.
 
-Este es el MVP de despliegue para Render:
-  - `/`         → landing mínima (HTML inline, confirma que está vivo).
-  - `/health`   → endpoint JSON para health-check de Render.
-  - `/status`   → info básica del entorno (versión Python, env, etc.).
+Estructura:
+  - `/health`, `/status`      → públicos (para Render + debug).
+  - `/login`, `/logout`       → autenticación.
+  - `/`                       → home protegida (sólo admin logueado).
+  - Todo lo demás: protegido por `Depends(require_user)`.
 
-Próximos pasos (a medida que vayamos migrando):
-  - `/auth/login`         → login simple usuario/clave (admin Primi Motors).
-  - `/upload/excel`       → subir Excel master (Catálogo / Compatibilidades / Stock).
-  - `/upload/fotos`       → subir fotos por SKU (se almacenan en R2/B2).
-  - `/ml/sync-stock`      → botón "sincronizar stock con ML".
-  - `/ml/publicar-lote`   → publicar SKUs en batch con diagnóstico previo.
-  - `/dashboard`          → SPA con estética Primi Motors.
-
-IMPORTANTE — variables de entorno en Render:
-  - `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ML_REFRESH_TOKEN`
-  - `DATABASE_URL`  (cuando migremos a Postgres)
-  - `R2_ACCESS_KEY`, `R2_SECRET_KEY`, `R2_BUCKET`  (cuando sumemos storage)
-  - `ADMIN_USER`, `ADMIN_PASSWORD_HASH`
-
-Hoy el backend NO toca la DB ni ML — es solo el "hola mundo" para confirmar
-que el pipeline GitHub → Render → admin.primimotors.com.ar funciona.
+Sesión: cookie firmada con `SESSION_SECRET` (env var). Expira a los 7 días.
 """
 
 from __future__ import annotations
@@ -31,59 +17,51 @@ from __future__ import annotations
 import os
 import platform
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Depends, FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+
+from . import auth
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
+
+# Raíz del paquete app/
+BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 app = FastAPI(
     title=APP_NAME,
     version=APP_VERSION,
-    description="Backend web del sistema Primi Motors (Mercado Libre, stock, publicaciones).",
+    description="Backend web de Primi Motors (ML, stock, publicaciones).",
+)
+
+# -------- Sesión --------
+# SESSION_SECRET debe venir de env vars en Render. Si no está, generamos uno
+# EFÍMERO (las sesiones se invalidan en cada reinicio). En producción real
+# SIEMPRE definirlo como env var para que las sesiones sobrevivan redeploys.
+_session_secret = os.environ.get("SESSION_SECRET")
+if not _session_secret:
+    import secrets as _secrets
+    _session_secret = _secrets.token_urlsafe(32)
+    # No imprimimos el secret por log (no queremos que quede en los logs de Render).
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_session_secret,
+    session_cookie="primi_session",
+    max_age=7 * 24 * 3600,        # 7 días
+    same_site="lax",
+    https_only=True,              # Render sirve sobre HTTPS
 )
 
 
-@app.get("/", response_class=HTMLResponse)
-def home() -> str:
-    """Landing mínima. Confirma visualmente que el deploy quedó vivo."""
-    return f"""
-    <!doctype html>
-    <html lang="es">
-      <head>
-        <meta charset="utf-8" />
-        <title>{APP_NAME}</title>
-        <style>
-          body {{
-            font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
-            background: #0b0b0b; color: #f2f2f2;
-            margin: 0; min-height: 100vh;
-            display: flex; align-items: center; justify-content: center;
-          }}
-          .card {{
-            background: #141414; border: 1px solid #222;
-            padding: 48px 56px; border-radius: 14px; max-width: 560px;
-          }}
-          h1 {{ margin: 0 0 8px; color: #ffb703; font-size: 28px; }}
-          p  {{ margin: 8px 0; color: #bbb; line-height: 1.5; }}
-          code {{ background: #1c1c1c; padding: 2px 6px; border-radius: 4px; color: #ffb703; }}
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h1>🚗 Primi Motors — Backend</h1>
-          <p>Versión <code>{APP_VERSION}</code> — deploy OK.</p>
-          <p>Endpoints: <code>/health</code> · <code>/status</code></p>
-          <p style="margin-top:24px; font-size:13px; color:#666;">
-            Sistema en construcción. Próximamente: panel de administración,
-            upload de catálogo, sincronización con Mercado Libre.
-          </p>
-        </div>
-      </body>
-    </html>
-    """
-
+# ===============================================================
+# Endpoints públicos
+# ===============================================================
 
 @app.get("/health")
 def health() -> JSONResponse:
@@ -101,4 +79,88 @@ def status() -> JSONResponse:
         "platform": platform.platform(),
         "env": os.environ.get("RENDER_SERVICE_NAME", "local"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "auth_configured": bool(os.environ.get("ADMIN_USER") and os.environ.get("ADMIN_PASSWORD_HASH")),
     })
+
+
+# ===============================================================
+# Login / logout
+# ===============================================================
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request):
+    """Form de login. Si ya está logueado, redirige a la home."""
+    if auth.current_user(request):
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_submit(
+    request: Request,
+    user: str = Form(...),
+    password: str = Form(...),
+):
+    """Verifica credenciales y crea sesión."""
+    if auth.check_credentials(user, password):
+        auth.login_session(request, user)
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "error": "Usuario o contraseña incorrectos."},
+        status_code=401,
+    )
+
+
+@app.post("/logout")
+@app.get("/logout")
+def logout(request: Request):
+    auth.logout_session(request)
+    return RedirectResponse("/login", status_code=303)
+
+
+# ===============================================================
+# Home (protegida)
+# ===============================================================
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request, user: str = Depends(auth.require_user)) -> str:
+    """Landing privada. El dashboard real se arma acá más adelante."""
+    return f"""
+    <!doctype html>
+    <html lang="es">
+      <head>
+        <meta charset="utf-8" />
+        <title>{APP_NAME}</title>
+        <style>
+          body {{
+            font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
+            background: #0b0b0b; color: #f2f2f2;
+            margin: 0; min-height: 100vh;
+            display: flex; align-items: center; justify-content: center;
+          }}
+          .card {{
+            background: #141414; border: 1px solid #222;
+            padding: 48px 56px; border-radius: 14px; max-width: 620px;
+          }}
+          h1 {{ margin: 0 0 8px; color: #ffb703; font-size: 28px; }}
+          p  {{ margin: 8px 0; color: #bbb; line-height: 1.5; }}
+          code {{ background: #1c1c1c; padding: 2px 6px; border-radius: 4px; color: #ffb703; }}
+          .row {{ display:flex; justify-content:space-between; align-items:center; margin-top:28px; font-size:13px; }}
+          a {{ color:#ffb703; text-decoration:none; }}
+          a:hover {{ text-decoration:underline; }}
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>🚗 Primi Motors — Panel</h1>
+          <p>Hola, <strong>{user}</strong>. Deploy versión <code>{APP_VERSION}</code>.</p>
+          <p>Próximamente: subir Excel master, publicar lote ML, sync stock, dashboard.</p>
+          <div class="row">
+            <span>admin.primimotors.com.ar</span>
+            <a href="/logout">Cerrar sesión</a>
+          </div>
+        </div>
+      </body>
+    </html>
+    """

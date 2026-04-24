@@ -29,6 +29,9 @@ pdfplumber>=0.10.3
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 jinja2>=3.1.3
+# Form data + sesiones firmadas
+python-multipart>=0.0.9
+itsdangerous>=2.1.2
 
 # Utilidades
 pydantic>=2.5.3
