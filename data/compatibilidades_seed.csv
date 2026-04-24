@@ -1,0 +1,17 @@
+sku_master,marca,modelo,anio_desde,anio_hasta,motor,notas
+0013,CHEVROLET,Apache C20 Pick Up,,,6 cilindros,Aplicación principal
+0013,OPEL,Ascona,1970,1988,,
+0013,OPEL,Kadett B,1965,1973,,
+0013,OPEL,Kadett C,1973,1979,,
+0013,OPEL,Manta,1970,1988,,
+0013,OPEL,Rekord B,1965,1966,,
+0013,OPEL,Rekord C,1966,1971,,
+0013,OPEL,Blitz,,,,Utilitario
+0020,CHEVROLET,Opala C20 Silverado,1971,2001,4 y 6 cilindros,Aplicación principal
+0020,WILLYS,Overland,,,,
+0020,GMC,Serie D/C,,,6 cilindros,Sistema Delco Remy
+0025,FORD,F-100 F-1000,1960,2012,,Aplicación principal
+0025,TOYOTA,Bandeirante,1960,2001,OM-364 diesel,
+0028,JOHN DEERE,3030 3130 Serie 30,,,diesel,Aplicación principal
+0028,JOHN DEERE,Tractor Serie 40,,,diesel,
+0028,CASE,Tractor Serie JX,,,diesel,

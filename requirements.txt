@@ -1,0 +1,35 @@
+# ============================================
+# PRIMI MOTORS — Dependencias del sistema
+# ============================================
+
+# HTTP y API
+requests>=2.31.0
+
+# Configuración
+python-dotenv>=1.0.0
+
+# Scheduler (tareas programadas)
+APScheduler>=3.10.4
+
+# Base de datos
+SQLAlchemy>=2.0.25
+
+# PDFs (remitos y notas de crédito)
+reportlab>=4.0.9
+
+# Excel (importar catálogos y stock)
+openpyxl>=3.1.2
+pandas>=2.1.4
+
+# PDF parsing (catálogos en PDF)
+pypdf>=4.0.0
+pdfplumber>=0.10.3
+
+# UI web local (Fase 6 en adelante)
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+jinja2>=3.1.3
+
+# Utilidades
+pydantic>=2.5.3
+python-dateutil>=2.8.2

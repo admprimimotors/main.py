@@ -1,0 +1,72 @@
+# ============================================================
+# Primi Motors — .gitignore
+# ============================================================
+
+# --- Credenciales ---
+.env
+.env.local
+*.env.local
+tokens.json
+data/tokens.json
+
+# --- Base de datos local (SQLite) ---
+# En Render usamos Postgres, así que la DB local NO se sube.
+data/*.db
+data/*.sqlite
+data/*.db-journal
+data/*.db-journal.*
+
+# --- Cache de atributos ML (se regenera solo) ---
+data/ml_attrs/
+
+# --- Logs ---
+data/logs/
+*.log
+
+# --- Reportes / outputs temporales ---
+data/reactivar_aros_REPORTE_*.csv
+data/import/
+data/fotos/
+data/remitos_ejemplo/
+
+# --- Documentos comerciales con datos de clientes (NUNCA al repo) ---
+data/notas_credito/
+data/remitos/
+remitos_generados/
+notas_credito_generadas/
+
+# --- PDFs pesados de catálogos (no hacen falta en el server) ---
+data/**/*.pdf
+data/*.pdf
+
+# --- Excels de trabajo ---
+*.xlsx
+*.xls
+!requirements.txt
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Editores / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Archivos raros de trabajo ---
+python
+
+# --- Fotos procesadas del usuario (se regeneran por ítem) ---
+data/fotos_procesadas/

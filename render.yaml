@@ -1,0 +1,49 @@
+# render.yaml — Infrastructure as Code para Render.
+#
+# Con este archivo commiteado en el repo, Render puede crear/actualizar
+# servicios automáticamente (Blueprint). Ver: https://render.com/docs/blueprint-spec
+#
+# Flujo:
+#   1. Push a GitHub.
+#   2. En Render → New → Blueprint → seleccionar este repo.
+#   3. Render lee este YAML y provisiona lo declarado acá.
+#
+# Cuando sumemos Postgres y el worker, agregamos entradas aquí.
+
+services:
+  # ---------------------------------------------------------------
+  # Backend web FastAPI
+  # ---------------------------------------------------------------
+  - type: web
+    name: primi-motors-backend
+    runtime: python
+    plan: free                       # arrancamos en free; subimos a starter cuando haga falta
+    region: oregon                   # cualquier región sirve mientras sea consistente
+    branch: main
+    autoDeploy: true                 # cada push a main redeploya
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Mercado Libre — las cargamos a mano en el dashboard de Render
+      # (no las declaramos con value:, para que Render las pida como secret).
+      - key: ML_CLIENT_ID
+        sync: false
+      - key: ML_CLIENT_SECRET
+        sync: false
+      - key: ML_REFRESH_TOKEN
+        sync: false
+      # Admin del panel (también secret, se define en Render)
+      - key: ADMIN_USER
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+
+# Cuando migremos a Postgres, sumar acá:
+# databases:
+#   - name: primi-motors-db
+#     plan: free
+#     databaseName: primi_motors
+#     user: primi
