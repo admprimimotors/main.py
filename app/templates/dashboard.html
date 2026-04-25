@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Inicio · Primi Motors{% endblock %}
+{% block page_title %}Inicio{% endblock %}
+
+{% block content %}
+<div class="page-intro">
+  <h2>Hola, {{ user }} 👋</h2>
+  <p>Resumen del estado actual del sistema.</p>
+</div>
+
+<div class="grid stats">
+  <div class="card stat">
+    <h3>Publicaciones activas</h3>
+    <div class="value">—</div>
+    <div class="delta">se cargará al sincronizar con ML</div>
+  </div>
+  <div class="card stat">
+    <h3>SKUs en stock</h3>
+    <div class="value">—</div>
+    <div class="delta">subí el Excel master para ver datos</div>
+  </div>
+  <div class="card stat">
+    <h3>Stock bajo</h3>
+    <div class="value">—</div>
+    <div class="delta">items con menos de 3 unidades</div>
+  </div>
+  <div class="card stat">
+    <h3>Preguntas ML pendientes</h3>
+    <div class="value">—</div>
+    <div class="delta">no respondidas hace +1h</div>
+  </div>
+</div>
+
+<div class="grid split">
+  <div class="card">
+    <div class="card-title">Actividad reciente</div>
+    <div style="color: var(--muted); padding: 28px 0; text-align: center; font-size: 13px;">
+      Sin actividad todavía.<br />
+      Cuando subas catálogo o publiques en ML va a aparecer acá.
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Próximos pasos</div>
+    <ul style="padding-left: 20px; margin: 0; color: var(--muted-strong); line-height: 1.9; font-size: 13px;">
+      <li>Definir modelos de DB (productos, stock)</li>
+      <li>Subir el primer Excel master</li>
+      <li>Conectar sync con Mercado Libre</li>
+      <li>Configurar respuestas automáticas</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Primi Motors{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0b0b0b;
+      --panel: #141414;
+      --panel-2: #1a1a1a;
+      --border: #262626;
+      --border-soft: #1f1f1f;
+      --text: #f2f2f2;
+      --muted: #8a8a8a;
+      --muted-strong: #c4c4c4;
+      --brand: #a01916;
+      --brand-hover: #c41e1a;
+      --brand-soft: rgba(160, 25, 22, 0.14);
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --radius: 10px;
+      --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    /* ---- Layout ---- */
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ---- Sidebar ---- */
+    .sidebar {
+      background: var(--panel);
+      border-right: 1px solid var(--border-soft);
+      display: flex; flex-direction: column;
+      position: sticky; top: 0; height: 100vh;
+    }
+    .sidebar-header {
+      padding: 22px 20px 18px;
+      border-bottom: 1px solid var(--border-soft);
+      display: flex; align-items: center; gap: 12px;
+    }
+    .logo {
+      width: 40px; height: 40px;
+      border-radius: 9px;
+      background: var(--brand);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; color: #fff; font-size: 16px;
+      letter-spacing: 0.5px;
+      box-shadow: 0 4px 14px rgba(160,25,22,.35);
+    }
+    .brand-text {
+      display: flex; flex-direction: column;
+      line-height: 1.2;
+    }
+    .brand-text strong { font-size: 15px; letter-spacing: 0.2px; }
+    .brand-text small { color: var(--muted); font-size: 11px; letter-spacing: 0.4px; text-transform: uppercase; }
+
+    .nav {
+      flex: 1; padding: 10px 10px 18px; overflow-y: auto;
+    }
+    .nav-label {
+      font-size: 10px; color: var(--muted);
+      letter-spacing: 0.8px; text-transform: uppercase;
+      padding: 16px 12px 6px;
+    }
+    .nav a {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 12px; margin: 2px 0;
+      border-radius: var(--radius-sm);
+      color: var(--muted-strong);
+      transition: background .12s, color .12s;
+      font-size: 14px;
+    }
+    .nav a:hover {
+      background: var(--panel-2);
+      color: var(--text);
+    }
+    .nav a.active {
+      background: var(--brand-soft);
+      color: var(--brand-hover);
+      font-weight: 600;
+    }
+    .nav a svg {
+      width: 18px; height: 18px;
+      stroke-width: 1.8;
+      flex-shrink: 0;
+    }
+
+    .sidebar-footer {
+      padding: 14px 18px;
+      border-top: 1px solid var(--border-soft);
+      font-size: 12px; color: var(--muted);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .sidebar-footer .pulse {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px rgba(34,197,94,.6);
+      display: inline-block; margin-right: 6px;
+    }
+
+    /* ---- Main column ---- */
+    .main {
+      display: flex; flex-direction: column;
+      min-width: 0;
+    }
+    .topbar {
+      height: 64px;
+      border-bottom: 1px solid var(--border-soft);
+      padding: 0 28px;
+      display: flex; align-items: center; justify-content: space-between;
+      background: var(--bg);
+      position: sticky; top: 0; z-index: 5;
+    }
+    .topbar-left {
+      display: flex; align-items: center; gap: 14px;
+    }
+    .topbar h1 {
+      margin: 0; font-size: 17px; font-weight: 600;
+      letter-spacing: 0.1px;
+    }
+    .user-menu {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 13px;
+      color: var(--muted-strong);
+    }
+    .user-avatar {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: var(--brand-soft); color: var(--brand-hover);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 12px;
+    }
+    .user-menu a {
+      color: var(--muted);
+      transition: color .12s;
+    }
+    .user-menu a:hover { color: var(--brand-hover); }
+
+    /* ---- Content ---- */
+    .content {
+      padding: 28px 28px 60px;
+      flex: 1;
+      width: 100%;
+      max-width: 1280px;
+    }
+    .page-intro { margin-bottom: 26px; }
+    .page-intro h2 {
+      margin: 0 0 6px;
+      font-size: 22px; letter-spacing: -0.2px;
+    }
+    .page-intro p { margin: 0; color: var(--muted); }
+
+    /* ---- Cards ---- */
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+    }
+    .card.stat h3 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+    }
+    .card.stat .value {
+      font-size: 28px; font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--text);
+    }
+    .card.stat .delta {
+      font-size: 12px; color: var(--muted);
+      margin-top: 6px;
+    }
+    .card .card-title {
+      font-size: 14px; font-weight: 600;
+      margin: 0 0 14px; color: var(--text);
+    }
+
+    .grid { display: grid; gap: 18px; }
+    .grid.stats {
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      margin-bottom: 22px;
+    }
+    .grid.split { grid-template-columns: 2fr 1fr; }
+    @media (max-width: 900px) {
+      .grid.split { grid-template-columns: 1fr; }
+    }
+
+    /* ---- Buttons ---- */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 16px;
+      background: var(--brand); color: #fff;
+      border: none; border-radius: 8px;
+      font-size: 14px; font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn:hover { background: var(--brand-hover); }
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted-strong);
+    }
+    .btn-ghost:hover {
+      border-color: var(--brand);
+      color: var(--text);
+    }
+
+    /* ---- Stub page ---- */
+    .stub {
+      display: flex; flex-direction: column; align-items: center;
+      text-align: center;
+      padding: 70px 40px;
+    }
+    .stub-icon {
+      width: 64px; height: 64px;
+      border-radius: 16px;
+      background: var(--brand-soft);
+      color: var(--brand-hover);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 22px;
+    }
+    .stub-icon svg { width: 28px; height: 28px; stroke-width: 1.6; }
+    .stub h2 { margin: 0 0 8px; font-size: 22px; }
+    .stub p { color: var(--muted); margin: 0; max-width: 440px; }
+    .stub .badge {
+      margin-top: 18px;
+      display: inline-block;
+      padding: 5px 12px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 11px; color: var(--muted);
+      letter-spacing: 0.4px; text-transform: uppercase;
+    }
+
+    /* ---- Mobile ---- */
+    .menu-toggle {
+      display: none;
+      width: 36px; height: 36px;
+      align-items: center; justify-content: center;
+      border-radius: 8px; border: 1px solid var(--border);
+      background: var(--panel-2); color: var(--text);
+      cursor: pointer;
+    }
+    .menu-toggle svg { width: 18px; height: 18px; stroke-width: 2; }
+    .sidebar-backdrop {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.5);
+      z-index: 50;
+    }
+    @media (max-width: 800px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar {
+        position: fixed; top: 0; left: -260px;
+        width: 260px; z-index: 100;
+        transition: left .25s;
+      }
+      .sidebar.open { left: 0; }
+      .sidebar.open + .main .sidebar-backdrop { display: block; }
+      .topbar { padding: 0 16px; }
+      .menu-toggle { display: inline-flex; }
+      .content { padding: 18px; }
+      .user-menu span:not(.user-avatar) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">PM</div>
+        <div class="brand-text">
+          <strong>Primi Motors</strong>
+          <small>Panel admin</small>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-label">General</div>
+        <a href="/" class="{% if active == 'home' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10"/></svg>
+          Inicio
+        </a>
+
+        <div class="nav-label">Operación</div>
+        <a href="/catalogo" class="{% if active == 'catalogo' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          Catálogo
+        </a>
+        <a href="/stock" class="{% if active == 'stock' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+          Stock
+        </a>
+        <a href="/publicaciones" class="{% if active == 'publicaciones' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+          Publicaciones ML
+        </a>
+        <a href="/precios" class="{% if active == 'precios' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Precios
+        </a>
+
+        <div class="nav-label">Relación</div>
+        <a href="/clientes" class="{% if active == 'clientes' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Clientes
+        </a>
+        <a href="/mensajes" class="{% if active == 'mensajes' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+          Mensajes ML
+        </a>
+
+        <div class="nav-label">Sistema</div>
+        <a href="/config" class="{% if active == 'config' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Configuración
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span>v{{ version }}</span>
+        <span><span class="pulse"></span>online</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="menu-toggle" aria-label="Abrir menú"
+                  onclick="document.getElementById('sidebar').classList.toggle('open')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <h1>{% block page_title %}Inicio{% endblock %}</h1>
+        </div>
+        <div class="user-menu">
+          <div class="user-avatar">{{ user[:2]|upper }}</div>
+          <span>{{ user }}</span>
+          <a href="/logout">Salir</a>
+        </div>
+      </header>
+
+      <section class="content">
+        {% block content %}{% endblock %}
+      </section>
+    </main>
+  </div>
+</body>
+</html>

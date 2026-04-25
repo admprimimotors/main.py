@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ section_name }} · Primi Motors{% endblock %}
+{% block page_title %}{{ section_name }}{% endblock %}
+
+{% block content %}
+<div class="card stub">
+  <div class="stub-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M9 9h6v6H9z"/>
+    </svg>
+  </div>
+  <h2>{{ section_name }}</h2>
+  <p>{{ section_desc }}</p>
+  <span class="badge">En construcción</span>
+</div>
+{% endblock %}

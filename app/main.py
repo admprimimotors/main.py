@@ -27,7 +27,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import auth, database
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -143,47 +143,69 @@ def logout(request: Request):
 
 
 # ===============================================================
-# Home (protegida)
+# Home (dashboard)
 # ===============================================================
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request, user: str = Depends(auth.require_user)) -> str:
-    """Landing privada. El dashboard real se arma acá más adelante."""
-    return f"""
-    <!doctype html>
-    <html lang="es">
-      <head>
-        <meta charset="utf-8" />
-        <title>{APP_NAME}</title>
-        <style>
-          body {{
-            font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
-            background: #0b0b0b; color: #f2f2f2;
-            margin: 0; min-height: 100vh;
-            display: flex; align-items: center; justify-content: center;
-          }}
-          .card {{
-            background: #141414; border: 1px solid #222;
-            padding: 48px 56px; border-radius: 14px; max-width: 620px;
-          }}
-          h1 {{ margin: 0 0 8px; color: #ffb703; font-size: 28px; }}
-          p  {{ margin: 8px 0; color: #bbb; line-height: 1.5; }}
-          code {{ background: #1c1c1c; padding: 2px 6px; border-radius: 4px; color: #ffb703; }}
-          .row {{ display:flex; justify-content:space-between; align-items:center; margin-top:28px; font-size:13px; }}
-          a {{ color:#ffb703; text-decoration:none; }}
-          a:hover {{ text-decoration:underline; }}
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h1>🚗 Primi Motors — Panel</h1>
-          <p>Hola, <strong>{user}</strong>. Deploy versión <code>{APP_VERSION}</code>.</p>
-          <p>Próximamente: subir Excel master, publicar lote ML, sync stock, dashboard.</p>
-          <div class="row">
-            <span>admin.primimotors.com.ar</span>
-            <a href="/logout">Cerrar sesión</a>
-          </div>
-        </div>
-      </body>
-    </html>
-    """
+def home(request: Request, user: str = Depends(auth.require_user)):
+    """Landing privada — dashboard con métricas (placeholder hasta tener data)."""
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {"user": user, "active": "home", "version": APP_VERSION},
+    )
+
+
+# ===============================================================
+# Stubs — secciones todavía sin construir
+# ===============================================================
+# Cada feature real va a reemplazar uno de estos handlers cuando esté lista.
+# El objetivo del stub es que el sidebar funcione end-to-end desde el día 1
+# (clickeás cualquier sección y te lleva a una página coherente).
+
+_STUBS = [
+    ("catalogo", "Catálogo",
+     "Productos, compatibilidades vehiculares y fichas técnicas. "
+     "Acá vas a poder subir el Excel master y editar ítem por ítem."),
+    ("stock", "Stock",
+     "Niveles de stock por SKU, alertas de bajo stock y reactivación "
+     "de ítems pausados en Mercado Libre."),
+    ("publicaciones", "Publicaciones ML",
+     "Estado de los ítems publicados en Mercado Libre — pausar, "
+     "republicar y ver estadísticas de cada uno."),
+    ("precios", "Precios",
+     "Cambios masivos de precio, márgenes por categoría y manejo "
+     "de listas de precios."),
+    ("clientes", "Clientes",
+     "Historial de compras, remitos y notas de crédito por cliente."),
+    ("mensajes", "Mensajes ML",
+     "Preguntas de compradores en Mercado Libre y respuestas "
+     "automáticas inteligentes."),
+    ("config", "Configuración",
+     "Tokens de Mercado Libre, ajustes del sistema y gestión "
+     "de usuarios del panel."),
+]
+
+
+def _make_stub_handler(slug: str, name: str, desc: str):
+    """Factory: arma un handler para una sección stub."""
+    def _handler(request: Request, user: str = Depends(auth.require_user)):
+        return templates.TemplateResponse(
+            request,
+            "stub.html",
+            {
+                "user": user,
+                "active": slug,
+                "version": APP_VERSION,
+                "section_name": name,
+                "section_desc": desc,
+            },
+        )
+    _handler.__name__ = f"stub_{slug}"
+    return _handler
+
+
+for _slug, _name, _desc in _STUBS:
+    app.get(f"/{_slug}", response_class=HTMLResponse)(
+        _make_stub_handler(_slug, _name, _desc)
+    )
