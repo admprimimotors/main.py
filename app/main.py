@@ -19,15 +19,17 @@ import platform
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session as DbSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, database
+from . import auth, catalogo, database
+from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -158,6 +160,95 @@ def home(request: Request, user: str = Depends(auth.require_user)):
 
 
 # ===============================================================
+# Catálogo — listado, upload de Excel master, template
+# ===============================================================
+
+@app.get("/catalogo", response_class=HTMLResponse)
+def catalogo_view(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+    q: str = "",
+    page: int = 1,
+):
+    """Listado paginado de productos con buscador."""
+    productos, total = catalogo.list_productos(db, search=q, page=page)
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "catalogo.html",
+        {
+            "user": user,
+            "active": "catalogo",
+            "version": APP_VERSION,
+            "productos": productos,
+            "total": total,
+            "search": q,
+            "page": page,
+            "page_size": catalogo.PAGE_SIZE,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/catalogo/upload")
+async def catalogo_upload(
+    request: Request,
+    archivo: UploadFile = File(...),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Recibe el Excel master, lo procesa y guarda flash con el resultado."""
+    fname = (archivo.filename or "").lower()
+    if not fname.endswith((".xlsx", ".xls")):
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "El archivo debe ser .xlsx o .xls",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    file_bytes = await archivo.read()
+    result = catalogo.process_excel_upload(db, file_bytes)
+
+    if result.ok:
+        msg = (
+            f"✓ {result.productos_total} productos procesados "
+            f"({result.productos_insertados} nuevos, {result.productos_actualizados} actualizados)"
+        )
+        if result.compats_creadas:
+            msg += f", {result.compats_creadas} compatibilidades"
+            if result.vehiculos_creados:
+                msg += f" ({result.vehiculos_creados} vehículos nuevos)"
+        request.session["flash"] = {"type": "success", "msg": msg}
+    else:
+        msg = (
+            f"Procesado con errores. "
+            f"Productos: {result.productos_total}, compats: {result.compats_creadas}. "
+            f"Errores: {' · '.join(result.errores[:5])}"
+        )
+        if len(result.errores) > 5:
+            msg += f" (+{len(result.errores) - 5} más)"
+        request.session["flash"] = {"type": "warning", "msg": msg}
+
+    return RedirectResponse("/catalogo", status_code=303)
+
+
+@app.get("/catalogo/template")
+def catalogo_template(user: str = Depends(auth.require_user)):
+    """Descarga un Excel template con las hojas y headers canónicos."""
+    excel_bytes = catalogo.generate_template()
+    return Response(
+        content=excel_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": 'attachment; filename="primi_motors_template.xlsx"'
+        },
+    )
+
+
+# ===============================================================
 # Stubs — secciones todavía sin construir
 # ===============================================================
 # Cada feature real va a reemplazar uno de estos handlers cuando esté lista.
@@ -165,9 +256,7 @@ def home(request: Request, user: str = Depends(auth.require_user)):
 # (clickeás cualquier sección y te lleva a una página coherente).
 
 _STUBS = [
-    ("catalogo", "Catálogo",
-     "Productos, compatibilidades vehiculares y fichas técnicas. "
-     "Acá vas a poder subir el Excel master y editar ítem por ítem."),
+    # "catalogo" ya no es stub — vive en su propio módulo (app/catalogo.py + rutas más abajo)
     ("stock", "Stock",
      "Niveles de stock por SKU, alertas de bajo stock y reactivación "
      "de ítems pausados en Mercado Libre."),

@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block title %}Catálogo · Primi Motors{% endblock %}
+{% block page_title %}Catálogo{% endblock %}
+
+{% block content %}
+<style>
+  .alert {
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 18px;
+    border: 1px solid;
+    line-height: 1.5;
+  }
+  .alert-success {
+    background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.40); color: #86efac;
+  }
+  .alert-warning {
+    background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d;
+  }
+  .alert-error {
+    background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5;
+  }
+
+  .upload-form {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .upload-form input[type=file] {
+    flex: 1 1 240px;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 13px;
+    cursor: pointer;
+  }
+  .upload-form input[type=file]::file-selector-button {
+    background: var(--panel); color: var(--muted-strong);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; margin-right: 12px;
+    cursor: pointer; font-size: 12px;
+  }
+
+  .search-form {
+    display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap;
+  }
+  .search-input {
+    flex: 1 1 320px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 14px; outline: none;
+    transition: border-color .15s;
+  }
+  .search-input:focus { border-color: var(--brand); }
+
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .data-table thead th {
+    text-align: left; padding: 12px 16px;
+    color: var(--muted); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    font-size: 11px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--panel-2);
+  }
+  .data-table tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    color: var(--muted-strong);
+  }
+  .data-table tbody tr:last-child td { border-bottom: none; }
+  .data-table tbody tr:hover { background: var(--panel-2); }
+  .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .data-table code {
+    background: var(--panel-2);
+    padding: 2px 6px; border-radius: 4px;
+    color: var(--brand-hover); font-size: 12px;
+  }
+
+  .badge-success {
+    background: rgba(34,197,94,.14); color: #86efac;
+    padding: 3px 10px; border-radius: 999px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .badge-muted {
+    background: var(--panel-2); color: var(--muted);
+    padding: 3px 10px; border-radius: 999px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+
+  .pagination {
+    display: flex; align-items: center; justify-content: center;
+    gap: 6px; margin-top: 22px;
+  }
+
+  .help-text {
+    color: var(--muted); font-size: 12px; margin-top: 12px;
+    line-height: 1.6;
+  }
+  .help-text code {
+    background: var(--panel-2); padding: 1px 6px; border-radius: 4px;
+    color: var(--brand-hover); font-size: 11px;
+  }
+</style>
+
+{% if flash %}
+<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>
+{% endif %}
+
+<div class="page-intro">
+  <h2>Catálogo</h2>
+  <p>{{ total }} producto{{ '' if total == 1 else 's' }} en la base. Subí el Excel master para sincronizar.</p>
+</div>
+
+<div class="card" style="margin-bottom: 22px;">
+  <div class="card-title">Importar / actualizar</div>
+  <form method="post" action="/catalogo/upload" enctype="multipart/form-data" class="upload-form">
+    <input type="file" name="archivo" accept=".xlsx,.xls" required />
+    <button type="submit" class="btn">Subir Excel</button>
+    <a href="/catalogo/template" class="btn btn-ghost">Descargar template</a>
+  </form>
+  <div class="help-text">
+    El Excel debe tener una hoja <code>Catalogo</code> (productos) y opcionalmente <code>Compatibilidades</code>.
+    Las columnas estándar (<code>SKU</code>, <code>Titulo</code>, <code>Precio_Final</code>, <code>Stock</code>, etc.) se mapean a los campos del producto;
+    cualquier columna extra (<code>Diametro_mm</code>, <code>Voltaje</code>, etc.) se guarda automáticamente en la ficha técnica.
+    Al subir, los SKUs existentes se <strong>actualizan</strong> y los nuevos se <strong>insertan</strong>.
+  </div>
+</div>
+
+<form method="get" action="/catalogo" class="search-form">
+  <input type="search" name="q" value="{{ search }}" placeholder="Buscar por SKU, título, marca o categoría…" class="search-input" />
+  <button type="submit" class="btn">Buscar</button>
+  {% if search %}<a href="/catalogo" class="btn btn-ghost">Limpiar</a>{% endif %}
+</form>
+
+{% if productos %}
+<div class="card" style="padding: 0; overflow-x: auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>SKU</th>
+        <th>Título</th>
+        <th>Categoría</th>
+        <th>Marca</th>
+        <th class="num">Precio</th>
+        <th class="num">Stock</th>
+        <th class="num">Compat.</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in productos %}
+      <tr>
+        <td><code>{{ p.sku }}</code></td>
+        <td>{{ p.titulo }}</td>
+        <td>{{ p.categoria or '—' }}</td>
+        <td>{{ p.marca or '—' }}</td>
+        <td class="num">
+          {% if p.precio_final is not none %}
+            ${{ "{:,.0f}".format(p.precio_final|float) }}
+          {% else %}—{% endif %}
+        </td>
+        <td class="num">{{ p.stock_actual }}</td>
+        <td class="num">{{ p.compat_count }}</td>
+        <td>
+          {% if p.activo %}
+            <span class="badge-success">Activo</span>
+          {% else %}
+            <span class="badge-muted">Pausado</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% set total_pages = ((total + page_size - 1) // page_size) if total > 0 else 1 %}
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+    <a href="?q={{ search|urlencode }}&page={{ page - 1 }}" class="btn btn-ghost">← Anterior</a>
+  {% endif %}
+  <span style="color: var(--muted); padding: 0 14px; font-size: 13px;">
+    Página {{ page }} de {{ total_pages }}
+  </span>
+  {% if page < total_pages %}
+    <a href="?q={{ search|urlencode }}&page={{ page + 1 }}" class="btn btn-ghost">Siguiente →</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card stub">
+  <div class="stub-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6">
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+      <line x1="12" y1="22.08" x2="12" y2="12"/>
+    </svg>
+  </div>
+  <h2>{% if search %}Sin resultados{% else %}Sin productos todavía{% endif %}</h2>
+  <p>
+    {% if search %}
+      No hay productos que coincidan con <strong>"{{ search }}"</strong>.
+    {% else %}
+      Subí tu Excel master para empezar. Si querés ver el formato, descargá el template arriba.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+{% endblock %}
