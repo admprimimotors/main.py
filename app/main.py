@@ -207,8 +207,24 @@ async def catalogo_upload(
         }
         return RedirectResponse("/catalogo", status_code=303)
 
-    file_bytes = await archivo.read()
-    result = catalogo.process_excel_upload(db, file_bytes)
+    # Wrap completo: si algo explota inesperado, mostramos el error en pantalla
+    # en vez de devolver un 500 mudo.
+    try:
+        file_bytes = await archivo.read()
+        result = catalogo.process_excel_upload(db, file_bytes)
+    except Exception as e:
+        # Logueamos a stderr (Render → Logs) y pasamos un mensaje al usuario.
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
 
     if result.ok:
         msg = (

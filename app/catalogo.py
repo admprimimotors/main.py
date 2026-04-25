@@ -121,6 +121,34 @@ def _is_blank(v: Any) -> bool:
     return v == ""
 
 
+def _to_native(v: Any) -> Any:
+    """
+    Convierte valores numpy/pandas a tipos nativos de Python.
+    Necesario porque numpy.int64 / numpy.float64 / pandas.Timestamp
+    no son JSON-serializables y rompen al guardarse en JSONB.
+    """
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    # numpy scalars (int64, float64, bool_) tienen .item() que devuelve nativo
+    if hasattr(v, "item") and not isinstance(v, (str, bytes, list, dict, tuple)):
+        try:
+            v = v.item()
+        except (ValueError, AttributeError, TypeError):
+            pass
+    # pandas Timestamp / datetime → ISO string (JSON-friendly)
+    if hasattr(v, "isoformat") and not isinstance(v, str):
+        try:
+            return v.isoformat()
+        except Exception:
+            return str(v)
+    return v
+
+
 def _parse_str(v: Any) -> Optional[str]:
     if _is_blank(v):
         return None
@@ -222,13 +250,14 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             val = row.get(col)
             if _is_blank(val):
                 continue
-            # Mantener tipos numéricos donde se pueda; texto si no
-            if isinstance(val, bool):
-                ficha[col] = val
-            elif isinstance(val, (int, float)):
-                ficha[col] = val
-            else:
-                ficha[col] = str(val).strip()
+            val = _to_native(val)  # numpy.int64 / Timestamp → tipos nativos
+            if val is None:
+                continue
+            if isinstance(val, str):
+                val = val.strip()
+                if not val:
+                    continue
+            ficha[col] = val
 
         def _g(field: str) -> Any:
             col = field_to_col.get(field)
