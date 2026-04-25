@@ -473,10 +473,18 @@ def process_excel_upload(db: Session, file_bytes: bytes) -> UploadResult:
         result.errores.append(f"No se pudo leer el Excel: {e}")
         return result
 
-    # Buscar hojas (case-insensitive, sin tildes)
+    # Buscar hojas (case-insensitive, sin tildes).
+    # OJO: no usar `or` con DataFrames — pandas no soporta evaluación truthy
+    # ("ValueError: The truth value of a DataFrame is ambiguous").
     sheet_lookup = {_norm_col(name): df for name, df in sheets.items()}
-    cat_df = sheet_lookup.get("catalogo") or sheet_lookup.get("productos")
-    compat_df = sheet_lookup.get("compatibilidades") or sheet_lookup.get("compat")
+
+    cat_df = sheet_lookup.get("catalogo")
+    if cat_df is None:
+        cat_df = sheet_lookup.get("productos")
+
+    compat_df = sheet_lookup.get("compatibilidades")
+    if compat_df is None:
+        compat_df = sheet_lookup.get("compat")
 
     if cat_df is None and compat_df is None:
         result.errores.append("El Excel no tiene hojas 'Catalogo' ni 'Compatibilidades'")
