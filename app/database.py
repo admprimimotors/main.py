@@ -105,6 +105,22 @@ def init_db() -> None:
     if engine is None:
         return
     # Importamos modelos para que se registren en metadata antes del create_all.
-    # (Comentado por ahora — lo activamos cuando existan modelos reales.)
-    # from . import models  # noqa: F401
+    # El import tiene side-effect: las clases que extienden Base se registran
+    # en Base.metadata al ser definidas.
+    from . import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+
+
+def count_tables() -> int:
+    """Devuelve cuántas tablas hay en el schema 'public'. Para /status."""
+    if engine is None:
+        return 0
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+            ))
+            return int(result.scalar() or 0)
+    except Exception:
+        return 0

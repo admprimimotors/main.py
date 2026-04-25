@@ -27,7 +27,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import auth, database
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -82,6 +82,7 @@ def status() -> JSONResponse:
         "auth_configured": bool(os.environ.get("ADMIN_USER") and os.environ.get("ADMIN_PASSWORD_HASH")),
         "db_configured": bool(os.environ.get("DATABASE_URL")),
         "db_connected": database.ping(),
+        "db_tables": database.count_tables(),
     })
 
 
