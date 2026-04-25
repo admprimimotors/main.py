@@ -574,6 +574,70 @@ def list_productos(
 
 
 # =============================================================
+# Detalle de un producto (para GET /catalogo/{sku})
+# =============================================================
+
+def get_producto_detail(db: Session, sku: str) -> Optional[dict]:
+    """
+    Devuelve un dict con todos los datos del producto + compatibilidades
+    + fotos. None si el SKU no existe.
+    """
+    prod = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return None
+
+    # Compats con datos del vehículo (un solo query, ordenado por marca/modelo/año)
+    compats_q = (
+        select(ProductoCompatibilidad, Vehiculo)
+        .join(Vehiculo, ProductoCompatibilidad.vehiculo_id == Vehiculo.id)
+        .where(ProductoCompatibilidad.producto_id == prod.id)
+        .order_by(
+            Vehiculo.marca,
+            Vehiculo.modelo,
+            Vehiculo.anio_desde.nulls_last(),
+        )
+    )
+    compats: list[dict] = []
+    for pc, v in db.execute(compats_q).all():
+        compats.append({
+            "id": pc.id,
+            "marca": v.marca,
+            "modelo": v.modelo,
+            "combustible": v.combustible,
+            "cilindros": v.cilindros,
+            "valvulas": v.valvulas,
+            "cilindrada_cc": v.cilindrada_cc,
+            "anio_desde": v.anio_desde,
+            "anio_hasta": v.anio_hasta,
+            "notas": pc.notas,
+        })
+
+    # Fotos (ya vienen ordenadas por `orden` por la relationship)
+    fotos = [{"url": f.url, "orden": f.orden} for f in prod.fotos]
+
+    return {
+        "id": prod.id,
+        "sku": prod.sku,
+        "titulo": prod.titulo,
+        "descripcion": prod.descripcion,
+        "categoria": prod.categoria,
+        "marca": prod.marca,
+        "ficha_tecnica": prod.ficha_tecnica or {},
+        "precio_costo": prod.precio_costo,
+        "precio_final": prod.precio_final,
+        "moneda": prod.moneda,
+        "stock_actual": prod.stock_actual,
+        "activo": prod.activo,
+        "created_at": prod.created_at,
+        "updated_at": prod.updated_at,
+        "compatibilidades": compats,
+        "fotos": fotos,
+    }
+
+
+# =============================================================
 # Generador de template Excel
 # =============================================================
 

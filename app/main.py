@@ -29,7 +29,7 @@ from . import auth, catalogo, database
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -260,6 +260,36 @@ def catalogo_template(user: str = Depends(auth.require_user)):
         ),
         headers={
             "Content-Disposition": 'attachment; filename="primi_motors_template.xlsx"'
+        },
+    )
+
+
+# IMPORTANTE: esta ruta va DESPUÉS de /upload y /template porque {sku} captura
+# cualquier path. Si la ponemos antes, se come a las dos rutas específicas.
+@app.get("/catalogo/{sku}", response_class=HTMLResponse)
+def catalogo_detail(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Vista detalle de un producto individual."""
+    detail = catalogo.get_producto_detail(db, sku)
+    if detail is None:
+        # SKU no existe — redirigimos al listado con un flash de error
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No se encontró el producto con SKU '{sku}'.",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "producto.html",
+        {
+            "user": user,
+            "active": "catalogo",
+            "version": APP_VERSION,
+            "producto": detail,
         },
     )
 

@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% block title %}{{ producto.titulo }} · Primi Motors{% endblock %}
+{% block page_title %}Producto{% endblock %}
+
+{% block content %}
+<style>
+  .breadcrumb {
+    color: var(--muted); font-size: 13px;
+    margin-bottom: 18px;
+  }
+  .breadcrumb a {
+    color: var(--muted-strong);
+    transition: color .12s;
+  }
+  .breadcrumb a:hover { color: var(--brand-hover); }
+
+  .product-header {
+    margin-bottom: 26px;
+  }
+  .product-header h1 {
+    margin: 0 0 14px;
+    font-size: 26px; letter-spacing: -0.3px;
+    line-height: 1.25;
+  }
+  .badge-row {
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  }
+  .pbadge {
+    display: inline-flex; align-items: center;
+    padding: 5px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 500;
+    background: var(--panel-2); color: var(--muted-strong);
+    border: 1px solid var(--border-soft);
+  }
+  .pbadge-sku {
+    font-family: ui-monospace, "SF Mono", monospace;
+    background: var(--brand-soft); color: var(--brand-hover);
+    border-color: rgba(160,25,22,.30);
+    font-weight: 600;
+  }
+  .pbadge-success {
+    background: rgba(34,197,94,.14); color: #86efac;
+    border-color: rgba(34,197,94,.30);
+  }
+  .pbadge-paused {
+    background: rgba(245,158,11,.10); color: #fcd34d;
+    border-color: rgba(245,158,11,.30);
+  }
+
+  .stats-row {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    margin-bottom: 22px;
+  }
+
+  .kv-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .kv-table tr { border-bottom: 1px solid var(--border-soft); }
+  .kv-table tr:last-child { border-bottom: none; }
+  .kv-table td {
+    padding: 11px 0;
+  }
+  .kv-table td:first-child {
+    color: var(--muted);
+    width: 42%;
+    text-transform: capitalize;
+  }
+  .kv-table td:last-child {
+    color: var(--muted-strong);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .compat-list {
+    list-style: none; padding: 0; margin: 0;
+  }
+  .compat-list li {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-soft);
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
+    font-size: 13px;
+  }
+  .compat-list li:last-child { border-bottom: none; }
+  .compat-vehiculo {
+    color: var(--text); font-weight: 600;
+    min-width: 180px;
+  }
+  .compat-anio {
+    color: var(--brand-hover);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    font-family: ui-monospace, "SF Mono", monospace;
+  }
+  .compat-specs {
+    color: var(--muted); font-size: 12px;
+  }
+  .compat-notas {
+    color: var(--muted); font-size: 12px;
+    font-style: italic;
+  }
+
+  .photos-grid {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+  .photo {
+    aspect-ratio: 1;
+    background: var(--panel-2);
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border-soft);
+  }
+  .photo img {
+    width: 100%; height: 100%; object-fit: cover;
+    display: block;
+  }
+
+  .empty-block {
+    color: var(--muted); font-size: 13px;
+    text-align: center; padding: 24px;
+    font-style: italic;
+  }
+
+  .audit-row {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    font-size: 12px; color: var(--muted);
+  }
+</style>
+
+<div class="breadcrumb">
+  <a href="/catalogo">← Volver al catálogo</a>
+</div>
+
+<div class="product-header">
+  <h1>{{ producto.titulo }}</h1>
+  <div class="badge-row">
+    <span class="pbadge pbadge-sku">{{ producto.sku }}</span>
+    {% if producto.categoria %}<span class="pbadge">{{ producto.categoria }}</span>{% endif %}
+    {% if producto.marca %}<span class="pbadge">{{ producto.marca }}</span>{% endif %}
+    {% if producto.activo %}
+      <span class="pbadge pbadge-success">● Activo</span>
+    {% else %}
+      <span class="pbadge pbadge-paused">● Pausado</span>
+    {% endif %}
+  </div>
+</div>
+
+<div class="stats-row">
+  <div class="card stat">
+    <h3>Precio costo</h3>
+    <div class="value">
+      {% if producto.precio_costo is not none %}
+        ${{ "{:,.0f}".format(producto.precio_costo|float) }}
+      {% else %}<span style="color: var(--muted);">—</span>{% endif %}
+    </div>
+    <div class="delta">{{ producto.moneda }}</div>
+  </div>
+  <div class="card stat">
+    <h3>Precio final</h3>
+    <div class="value">
+      {% if producto.precio_final is not none %}
+        ${{ "{:,.0f}".format(producto.precio_final|float) }}
+      {% else %}<span style="color: var(--muted);">—</span>{% endif %}
+    </div>
+    <div class="delta">{{ producto.moneda }}</div>
+  </div>
+  <div class="card stat">
+    <h3>Stock</h3>
+    <div class="value">{{ producto.stock_actual }}</div>
+    <div class="delta">unidades disponibles</div>
+  </div>
+</div>
+
+{% if producto.descripcion %}
+<div class="card" style="margin-bottom: 18px;">
+  <div class="card-title">Descripción</div>
+  <p style="margin: 0; color: var(--muted-strong); line-height: 1.6; font-size: 13px; white-space: pre-line;">{{ producto.descripcion }}</p>
+</div>
+{% endif %}
+
+<div class="card" style="margin-bottom: 18px;">
+  <div class="card-title">Ficha técnica</div>
+  {% if producto.ficha_tecnica %}
+    <table class="kv-table">
+      {% for key, val in producto.ficha_tecnica.items() %}
+      <tr>
+        <td>{{ key.replace('_', ' ') }}</td>
+        <td>{{ val }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="empty-block">Sin ficha técnica cargada para este producto.</div>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom: 18px;">
+  <div class="card-title">Compatibilidades vehiculares ({{ producto.compatibilidades|length }})</div>
+  {% if producto.compatibilidades %}
+    <ul class="compat-list">
+      {% for c in producto.compatibilidades %}
+      <li>
+        <span class="compat-vehiculo">{{ c.marca }} {{ c.modelo }}</span>
+        {% if c.anio_desde and c.anio_hasta %}
+          <span class="compat-anio">{{ c.anio_desde }}–{{ c.anio_hasta }}</span>
+        {% elif c.anio_desde %}
+          <span class="compat-anio">desde {{ c.anio_desde }}</span>
+        {% elif c.anio_hasta %}
+          <span class="compat-anio">hasta {{ c.anio_hasta }}</span>
+        {% endif %}
+        {% set specs = [] %}
+        {% if c.combustible %}{% set _ = specs.append(c.combustible) %}{% endif %}
+        {% if c.cilindros %}{% set _ = specs.append(c.cilindros|string + ' cyl') %}{% endif %}
+        {% if c.valvulas %}{% set _ = specs.append(c.valvulas|string + ' válv') %}{% endif %}
+        {% if c.cilindrada_cc %}{% set _ = specs.append(c.cilindrada_cc|string + 'cc') %}{% endif %}
+        {% if specs %}<span class="compat-specs">{{ specs|join(' · ') }}</span>{% endif %}
+        {% if c.notas %}<span class="compat-notas">— {{ c.notas }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="empty-block">Sin compatibilidades cargadas.</div>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom: 18px;">
+  <div class="card-title">Fotos ({{ producto.fotos|length }})</div>
+  {% if producto.fotos %}
+    <div class="photos-grid">
+      {% for f in producto.fotos %}
+      <div class="photo"><img src="{{ f.url }}" alt="" loading="lazy" /></div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-block">
+      Sin fotos cargadas. La subida a Cloudflare R2 se habilita en la próxima iteración.
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="audit-row">
+    {% if producto.created_at %}<span>Creado: {{ producto.created_at.strftime('%d/%m/%Y %H:%M') }}</span>{% endif %}
+    {% if producto.updated_at %}<span>Última actualización: {{ producto.updated_at.strftime('%d/%m/%Y %H:%M') }}</span>{% endif %}
+  </div>
+</div>
+
+{% endblock %}

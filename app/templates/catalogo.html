@@ -70,7 +70,12 @@
     color: var(--muted-strong);
   }
   .data-table tbody tr:last-child td { border-bottom: none; }
-  .data-table tbody tr:hover { background: var(--panel-2); }
+  .data-table tbody tr.clickable {
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .data-table tbody tr.clickable:hover { background: var(--panel-2); }
+  .data-table tbody tr.clickable:hover code { color: var(--brand-hover); }
   .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
   .data-table code {
     background: var(--panel-2);
@@ -151,7 +156,7 @@
     </thead>
     <tbody>
       {% for p in productos %}
-      <tr>
+      <tr class="clickable" onclick="location.href='/catalogo/{{ p.sku|urlencode }}'">
         <td><code>{{ p.sku }}</code></td>
         <td>{{ p.titulo }}</td>
         <td>{{ p.categoria or '—' }}</td>
