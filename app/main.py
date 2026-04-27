@@ -29,7 +29,7 @@ from . import auth, catalogo, database, ml_client, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.13.0"
+APP_VERSION = "0.14.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -478,6 +478,188 @@ async def catalogo_ml_link_upload(
             "msg": msg,
         }
 
+    return RedirectResponse("/catalogo", status_code=303)
+
+
+# ---------------------------------------------------------------
+# Bulk operations: hidratar y push a ML, con selección por checkbox
+# o "todos los que matchean los filtros activos"
+# ---------------------------------------------------------------
+
+# Caps conservadores para evitar timeouts de Render (~100s por request).
+HIDRATAR_CAP = 5     # cada hidratación toma 10-15s por las fotos
+PUSH_CAP = 50        # cada push es ~500ms
+
+
+def _resolver_skus_bulk(
+    db: DbSession,
+    *,
+    skus_form: list[str],
+    modo: str,
+    cap: int,
+    only_linked: bool,
+    filtro_q: str,
+    filtro_vinculadas: str,
+    filtro_categoria: str,
+    filtro_marca: str,
+) -> list[str]:
+    """
+    Resuelve la lista efectiva de SKUs a procesar según el modo:
+      - "seleccionados": usa los SKUs del form, capeados
+      - "matching": ignora el form, busca en DB los más antiguos que
+        matchean los filtros del listado
+    """
+    if modo == "matching":
+        return catalogo.skus_oldest_matching(
+            db,
+            search=filtro_q,
+            vinculadas=filtro_vinculadas,
+            categoria=filtro_categoria,
+            marca=filtro_marca,
+            limit=cap,
+            only_linked=only_linked,
+        )
+    return [s for s in skus_form if s][:cap]
+
+
+@app.post("/catalogo/bulk/hidratar")
+def catalogo_bulk_hidratar(
+    request: Request,
+    skus: list[str] = Form(default=[]),
+    modo: str = Form(default="seleccionados"),
+    filtro_q: str = Form(default=""),
+    filtro_vinculadas: str = Form(default=""),
+    filtro_categoria: str = Form(default=""),
+    filtro_marca: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Hidrata desde ML los SKUs seleccionados (capeado a HIDRATAR_CAP)."""
+    target_skus = _resolver_skus_bulk(
+        db,
+        skus_form=skus,
+        modo=modo,
+        cap=HIDRATAR_CAP,
+        only_linked=True,
+        filtro_q=filtro_q,
+        filtro_vinculadas=filtro_vinculadas,
+        filtro_categoria=filtro_categoria,
+        filtro_marca=filtro_marca,
+    )
+
+    if not target_skus:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": "Ningún SKU para hidratar (¿seleccionaste alguno con ML_Item_ID?).",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    ok = 0
+    errores: list[str] = []
+    for sku in target_skus:
+        try:
+            success, msg = catalogo.sync_producto_from_ml(db, sku, hidratar=True)
+        except Exception as e:
+            success = False
+            msg = f"{type(e).__name__}: {e}"
+        if success:
+            ok += 1
+        else:
+            errores.append(f"{sku}: {msg}")
+
+    total = len(target_skus)
+    if ok == total:
+        msg = f"✓ {ok} hidratados (título, precio, categoría y fotos donde faltaban)."
+        flash_type = "success"
+    elif ok:
+        msg = (
+            f"{ok}/{total} hidratados · {len(errores)} con error: "
+            + " · ".join(errores[:3])
+        )
+        flash_type = "warning"
+    else:
+        msg = "Ninguno se hidrató: " + " · ".join(errores[:3])
+        flash_type = "error"
+
+    if total == HIDRATAR_CAP and modo == "matching":
+        msg += f" · Hay más placeholders pendientes — repetí el botón hasta que la cuenta sea 0."
+
+    request.session["flash"] = {"type": flash_type, "msg": msg}
+    return RedirectResponse("/catalogo", status_code=303)
+
+
+@app.post("/catalogo/bulk/push")
+def catalogo_bulk_push(
+    request: Request,
+    skus: list[str] = Form(default=[]),
+    modo: str = Form(default="seleccionados"),
+    filtro_q: str = Form(default=""),
+    filtro_vinculadas: str = Form(default=""),
+    filtro_categoria: str = Form(default=""),
+    filtro_marca: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Pushea a ML stock + precio del DB local de los SKUs seleccionados (cap PUSH_CAP)."""
+    if not ml_client.is_write_enabled():
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "Write sync deshabilitado. Seteá ML_SYNC_WRITE_ENABLED=true en Render.",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    target_skus = _resolver_skus_bulk(
+        db,
+        skus_form=skus,
+        modo=modo,
+        cap=PUSH_CAP,
+        only_linked=True,
+        filtro_q=filtro_q,
+        filtro_vinculadas=filtro_vinculadas,
+        filtro_categoria=filtro_categoria,
+        filtro_marca=filtro_marca,
+    )
+
+    if not target_skus:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": "Ningún SKU para pushear.",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    ok = 0
+    errores: list[str] = []
+    for sku in target_skus:
+        try:
+            success, msg = catalogo.push_to_ml(
+                db, sku, push_stock=True, push_price=True
+            )
+        except Exception as e:
+            success = False
+            msg = f"{type(e).__name__}: {e}"
+        if success:
+            ok += 1
+        else:
+            errores.append(f"{sku}: {msg}")
+
+    total = len(target_skus)
+    if ok == total:
+        msg = f"✓ {ok} productos pusheados a ML (stock + precio)."
+        flash_type = "success"
+    elif ok:
+        msg = (
+            f"{ok}/{total} OK · {len(errores)} con error: "
+            + " · ".join(errores[:3])
+        )
+        flash_type = "warning"
+    else:
+        msg = "Ninguno se pusheó: " + " · ".join(errores[:3])
+        flash_type = "error"
+
+    if total == PUSH_CAP and modo == "matching":
+        msg += " · Quedan más para pushear — repetí el botón."
+
+    request.session["flash"] = {"type": flash_type, "msg": msg}
     return RedirectResponse("/catalogo", status_code=303)
 
 

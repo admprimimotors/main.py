@@ -538,6 +538,53 @@ def process_excel_upload(db: Session, file_bytes: bytes) -> UploadResult:
 # Listado y búsqueda (para el GET /catalogo)
 # =============================================================
 
+def skus_oldest_matching(
+    db: Session,
+    *,
+    search: str = "",
+    vinculadas: str = "",
+    categoria: str = "",
+    marca: str = "",
+    limit: int = 50,
+    only_linked: bool = False,
+) -> list[str]:
+    """
+    Devuelve SKUs que matchean los filtros, ordenados por ml_last_synced_at ASC
+    NULLS FIRST (los nunca sincronizados primero, después los más viejos).
+
+    Si `only_linked=True`, además filtra solo los que tienen ml_item_id.
+    Útil para bulk hidratar (no tiene sentido hidratar lo que no está vinculado)
+    y bulk push (idem).
+    """
+    q = select(Producto.sku)
+
+    extra_conds = []
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        extra_conds.append(or_(
+            Producto.sku.ilike(like),
+            Producto.titulo.ilike(like),
+            Producto.marca.ilike(like),
+            Producto.categoria.ilike(like),
+        ))
+    if vinculadas == "si":
+        extra_conds.append(Producto.ml_item_id.is_not(None))
+    elif vinculadas == "no":
+        extra_conds.append(Producto.ml_item_id.is_(None))
+    if categoria:
+        extra_conds.append(Producto.categoria == categoria)
+    if marca:
+        extra_conds.append(Producto.marca == marca)
+    if only_linked:
+        extra_conds.append(Producto.ml_item_id.is_not(None))
+
+    for cond in extra_conds:
+        q = q.where(cond)
+
+    q = q.order_by(Producto.ml_last_synced_at.asc().nulls_first()).limit(limit)
+    return [s for (s,) in db.execute(q).all()]
+
+
 def list_categorias(db: Session) -> list[str]:
     """Lista de categorías distintas, no-nulas, ordenadas alfabéticamente."""
     rows = db.execute(

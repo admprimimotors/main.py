@@ -67,6 +67,52 @@
     border: 1px solid rgba(160,25,22,.30);
   }
 
+  .bulk-bar {
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 14px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .bulk-bar .count {
+    font-size: 13px; color: var(--muted-strong);
+    min-width: 110px;
+  }
+  .bulk-bar .count strong { color: var(--brand-hover); font-size: 15px; }
+  .bulk-bar .divider {
+    width: 1px; height: 22px; background: var(--border);
+  }
+  .bulk-bar button[type=submit] {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 14px; font-size: 13px; font-weight: 500;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .bulk-bar button[type=submit]:hover {
+    background: var(--panel); border-color: var(--brand);
+  }
+  .bulk-bar button[type=submit]:disabled {
+    opacity: 0.4; cursor: not-allowed;
+  }
+  .bulk-bar button[type=submit]:disabled:hover {
+    background: var(--panel-2); border-color: var(--border);
+  }
+  .bulk-bar .group-label {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.4px;
+    margin-right: 4px;
+  }
+
+  .data-table input[type=checkbox] {
+    cursor: pointer;
+    width: 16px; height: 16px;
+  }
+  .data-table .check-cell {
+    width: 36px; text-align: center;
+  }
+
   .data-table {
     width: 100%;
     border-collapse: collapse;
@@ -223,62 +269,135 @@
 </form>
 
 {% if productos %}
-<div class="card" style="padding: 0; overflow-x: auto;">
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>SKU</th>
-        <th>Título</th>
-        <th>Categoría</th>
-        <th>Marca</th>
-        <th class="num">Precio</th>
-        <th class="num">Stock</th>
-        <th class="num">Compat.</th>
-        <th>ML</th>
-        <th>Estado</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for p in productos %}
-      <tr class="clickable" onclick="location.href='/catalogo/{{ p.sku|urlencode }}'">
-        <td><code>{{ p.sku }}</code></td>
-        <td>{{ p.titulo }}</td>
-        <td>{{ p.categoria or '—' }}</td>
-        <td>{{ p.marca or '—' }}</td>
-        <td class="num">
-          {% if p.precio_final is not none %}
-            ${{ "{:,.0f}".format(p.precio_final|float) }}
-          {% else %}—{% endif %}
-        </td>
-        <td class="num">{{ p.stock_actual }}</td>
-        <td class="num">{{ p.compat_count }}</td>
-        <td>
-          {% if p.ml_item_id %}
-            {% if p.ml_permalink %}
-              <a href="{{ p.ml_permalink }}" target="_blank" rel="noopener noreferrer"
-                 class="ml-chip" title="Ver en Mercado Libre"
-                 onclick="event.stopPropagation();">
-                ↗ Vinculado
-              </a>
+<form method="post" id="bulk-form">
+  {# Filtros activos pasados como hidden para el modo "matching" #}
+  <input type="hidden" name="filtro_q" value="{{ search }}" />
+  <input type="hidden" name="filtro_vinculadas" value="{{ vinculadas }}" />
+  <input type="hidden" name="filtro_categoria" value="{{ categoria }}" />
+  <input type="hidden" name="filtro_marca" value="{{ marca }}" />
+
+  <div class="bulk-bar">
+    <span class="count"><strong id="sel-count">0</strong> seleccionado{{ '' }}{# placeholder #}</span>
+    <div class="divider"></div>
+
+    <span class="group-label">Seleccionados</span>
+    <button type="submit" formaction="/catalogo/bulk/hidratar" name="modo" value="seleccionados"
+            id="btn-hid-sel" disabled
+            onclick="return confirm('Hidratar los seleccionados desde ML? Trae título, precio, categoría y fotos para los que estén vacíos. Procesa hasta 5 por click.');">
+      ↓ Hidratar (max 5)
+    </button>
+    <button type="submit" formaction="/catalogo/bulk/push" name="modo" value="seleccionados"
+            id="btn-push-sel" disabled
+            onclick="return confirm('Pushear stock + precio del DB local a las publicaciones de ML seleccionadas? Procesa hasta 50 por click.');">
+      ↑ Push a ML (max 50)
+    </button>
+
+    <div class="divider"></div>
+
+    <span class="group-label">Que matchean filtros</span>
+    <button type="submit" formaction="/catalogo/bulk/hidratar" name="modo" value="matching"
+            onclick="return confirm('Hidratar los 5 más antiguos que matchean los filtros activos?');">
+      ↓ Hidratar 5 más antiguos
+    </button>
+    <button type="submit" formaction="/catalogo/bulk/push" name="modo" value="matching"
+            onclick="return confirm('Pushear los 50 más antiguos que matchean los filtros activos?');">
+      ↑ Push 50 más antiguos
+    </button>
+  </div>
+
+  <div class="card" style="padding: 0; overflow-x: auto;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th class="check-cell">
+            <input type="checkbox" id="select-all-visible" title="Seleccionar todos los visibles" />
+          </th>
+          <th>SKU</th>
+          <th>Título</th>
+          <th>Categoría</th>
+          <th>Marca</th>
+          <th class="num">Precio</th>
+          <th class="num">Stock</th>
+          <th class="num">Compat.</th>
+          <th>ML</th>
+          <th>Estado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in productos %}
+        <tr class="clickable" onclick="location.href='/catalogo/{{ p.sku|urlencode }}'">
+          <td class="check-cell" onclick="event.stopPropagation();">
+            <input type="checkbox" name="skus" value="{{ p.sku }}" class="row-check" />
+          </td>
+          <td><code>{{ p.sku }}</code></td>
+          <td>{{ p.titulo }}</td>
+          <td>{{ p.categoria or '—' }}</td>
+          <td>{{ p.marca or '—' }}</td>
+          <td class="num">
+            {% if p.precio_final is not none %}
+              ${{ "{:,.0f}".format(p.precio_final|float) }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">{{ p.stock_actual }}</td>
+          <td class="num">{{ p.compat_count }}</td>
+          <td>
+            {% if p.ml_item_id %}
+              {% if p.ml_permalink %}
+                <a href="{{ p.ml_permalink }}" target="_blank" rel="noopener noreferrer"
+                   class="ml-chip" title="Ver en Mercado Libre"
+                   onclick="event.stopPropagation();">
+                  ↗ Vinculado
+                </a>
+              {% else %}
+                <span class="ml-chip" title="{{ p.ml_item_id }}">↗ Vinculado</span>
+              {% endif %}
             {% else %}
-              <span class="ml-chip" title="{{ p.ml_item_id }}">↗ Vinculado</span>
+              <span class="ml-chip-empty">Sin vincular</span>
             {% endif %}
-          {% else %}
-            <span class="ml-chip-empty">Sin vincular</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if p.activo %}
-            <span class="badge-success">En catálogo</span>
-          {% else %}
-            <span class="badge-muted">Archivado</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+          </td>
+          <td>
+            {% if p.activo %}
+              <span class="badge-success">En catálogo</span>
+            {% else %}
+              <span class="badge-muted">Archivado</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</form>
+
+<script>
+(function() {
+  const selectAll = document.getElementById('select-all-visible');
+  const rowChecks = document.querySelectorAll('.row-check');
+  const counter = document.getElementById('sel-count');
+  const btnHidSel = document.getElementById('btn-hid-sel');
+  const btnPushSel = document.getElementById('btn-push-sel');
+
+  function update() {
+    const n = document.querySelectorAll('.row-check:checked').length;
+    counter.textContent = n;
+    btnHidSel.disabled = (n === 0);
+    btnPushSel.disabled = (n === 0);
+    // sincronizar el "select all visible" si están todos
+    if (rowChecks.length > 0) {
+      selectAll.checked = (n === rowChecks.length);
+      selectAll.indeterminate = (n > 0 && n < rowChecks.length);
+    }
+  }
+
+  selectAll.addEventListener('change', () => {
+    rowChecks.forEach(cb => { cb.checked = selectAll.checked; });
+    update();
+  });
+  rowChecks.forEach(cb => cb.addEventListener('change', update));
+
+  update();
+})();
+</script>
 
 {% set total_pages = ((total + page_size - 1) // page_size) if total > 0 else 1 %}
 {% set filter_qs = 'q=' ~ (search|urlencode) ~ '&vinculadas=' ~ (vinculadas|urlencode) ~ '&categoria=' ~ (categoria|urlencode) ~ '&marca=' ~ (marca|urlencode) %}
