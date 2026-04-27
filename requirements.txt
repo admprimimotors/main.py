@@ -35,6 +35,11 @@ jinja2>=3.1.3
 python-multipart>=0.0.9
 itsdangerous>=2.1.2
 
+# Storage de fotos: Cloudflare R2 (S3-compatible vía boto3)
+boto3>=1.34.0
+# Procesamiento de imágenes (resize + compresión JPEG)
+Pillow>=10.2.0
+
 # Utilidades
 pydantic>=2.5.3
 python-dateutil>=2.8.2

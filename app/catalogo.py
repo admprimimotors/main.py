@@ -27,7 +27,7 @@ from sqlalchemy import func as sql_func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from .models import Producto, ProductoCompatibilidad, Vehiculo
+from .models import FotoProducto, Producto, ProductoCompatibilidad, Vehiculo
 
 
 # =============================================================
@@ -615,7 +615,10 @@ def get_producto_detail(db: Session, sku: str) -> Optional[dict]:
         })
 
     # Fotos (ya vienen ordenadas por `orden` por la relationship)
-    fotos = [{"url": f.url, "orden": f.orden} for f in prod.fotos]
+    fotos = [
+        {"id": f.id, "url": f.url, "orden": f.orden}
+        for f in prod.fotos
+    ]
 
     return {
         "id": prod.id,
@@ -711,3 +714,74 @@ def generate_template() -> bytes:
         compat_df.to_excel(writer, sheet_name="Compatibilidades", index=False)
 
     return output.getvalue()
+
+
+# =============================================================
+# Fotos: upload / delete
+# =============================================================
+
+def add_foto(
+    db: Session,
+    sku: str,
+    image_bytes: bytes,
+    filename: str = "",
+) -> tuple[bool, str]:
+    """
+    Optimiza la imagen, la sube a R2 y guarda el registro en la DB.
+    Devuelve (ok, mensaje).
+    """
+    from . import storage  # import lazy para no requerir boto3 en tests
+
+    if not storage.is_configured():
+        return False, "Storage R2 no está configurado en las env vars"
+
+    prod = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return False, f"Producto '{sku}' no existe"
+
+    try:
+        upload = storage.upload_photo(image_bytes, sku, filename)
+    except Exception as e:
+        return False, f"Error subiendo foto: {type(e).__name__}: {e}"
+
+    # Orden = último + 1 (si no hay fotos, queda en 0)
+    max_orden = db.execute(
+        select(sql_func.coalesce(sql_func.max(FotoProducto.orden), -1))
+        .where(FotoProducto.producto_id == prod.id)
+    ).scalar()
+    max_orden = -1 if max_orden is None else int(max_orden)
+
+    db.add(FotoProducto(
+        producto_id=prod.id,
+        storage_key=upload["storage_key"],
+        url=upload["url"],
+        orden=max_orden + 1,
+        bytes_size=upload["bytes_size"],
+        width_px=upload["width_px"],
+        height_px=upload["height_px"],
+    ))
+    db.commit()
+    return True, "Foto subida correctamente"
+
+
+def delete_foto(db: Session, foto_id: int) -> tuple[bool, str]:
+    """
+    Borra una foto de R2 (best-effort) y de la DB.
+    Devuelve (ok, mensaje).
+    """
+    from . import storage
+
+    foto = db.execute(
+        select(FotoProducto).where(FotoProducto.id == foto_id)
+    ).scalar_one_or_none()
+    if foto is None:
+        return False, "Foto no encontrada"
+
+    # R2 borra es best-effort: si falla, igual borramos de la DB
+    storage.delete_photo(foto.storage_key)
+
+    db.delete(foto)
+    db.commit()
+    return True, "Foto eliminada"

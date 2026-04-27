@@ -25,11 +25,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session as DbSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, catalogo, database
+from . import auth, catalogo, database, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.8.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -282,6 +282,7 @@ def catalogo_detail(
             "msg": f"No se encontró el producto con SKU '{sku}'.",
         }
         return RedirectResponse("/catalogo", status_code=303)
+    flash = request.session.pop("flash", None)
     return templates.TemplateResponse(
         request,
         "producto.html",
@@ -290,8 +291,87 @@ def catalogo_detail(
             "active": "catalogo",
             "version": APP_VERSION,
             "producto": detail,
+            "flash": flash,
+            "r2_configured": storage.is_configured(),
         },
     )
+
+
+# ---------------------------------------------------------------
+# Fotos del producto: subir + eliminar
+# ---------------------------------------------------------------
+
+@app.post("/catalogo/{sku}/fotos")
+async def catalogo_foto_upload(
+    request: Request,
+    sku: str,
+    archivos: list[UploadFile] = File(...),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Sube una o más fotos a R2 y las asocia al producto."""
+    if not storage.is_configured():
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "Storage R2 no está configurado. Cargá las env vars en Render.",
+        }
+        return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+    subidas = 0
+    errores: list[str] = []
+    for archivo in archivos:
+        if not archivo.filename:
+            continue
+        try:
+            file_bytes = await archivo.read()
+            ok, msg = catalogo.add_foto(db, sku, file_bytes, archivo.filename)
+            if ok:
+                subidas += 1
+            else:
+                errores.append(f"{archivo.filename}: {msg}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            errores.append(f"{archivo.filename}: {type(e).__name__}: {e}")
+
+    if subidas and not errores:
+        request.session["flash"] = {
+            "type": "success",
+            "msg": f"✓ {subidas} foto{'' if subidas == 1 else 's'} subida{'' if subidas == 1 else 's'} correctamente.",
+        }
+    elif subidas:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": (
+                f"{subidas} subidas, {len(errores)} con error: "
+                + " · ".join(errores[:3])
+                + (f" (+{len(errores) - 3} más)" if len(errores) > 3 else "")
+            ),
+        }
+    else:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "No se pudo subir ninguna foto: " + " · ".join(errores[:3]),
+        }
+
+    return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+
+@app.post("/catalogo/{sku}/fotos/{foto_id}/delete")
+def catalogo_foto_delete(
+    request: Request,
+    sku: str,
+    foto_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Elimina una foto del producto (de R2 y de la DB)."""
+    ok, msg = catalogo.delete_foto(db, foto_id)
+    request.session["flash"] = {
+        "type": "success" if ok else "error",
+        "msg": msg,
+    }
+    return RedirectResponse(f"/catalogo/{sku}", status_code=303)
 
 
 # ===============================================================
