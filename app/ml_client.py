@@ -238,6 +238,30 @@ def get_user_info(db: Session) -> dict:
     return _get(db, "/users/me")
 
 
+# Cache de categorías (clave = category_id ML, valor = dict con name, etc.)
+# El proceso es de un solo worker, así que un dict en memoria sirve y vacía
+# en cada redeploy (cosa OK, las categorías de ML no cambian seguido).
+_category_cache: dict = {}
+
+
+def get_category(db: Session, category_id: str) -> dict:
+    """
+    Trae datos de una categoría de ML por ID. Devuelve {} si no se encuentra
+    o si hay algún error (no levanta — esto es para enriquecer placeholders,
+    no para flujos críticos).
+    """
+    if not category_id:
+        return {}
+    if category_id in _category_cache:
+        return _category_cache[category_id]
+    try:
+        info = _get(db, f"/categories/{category_id}")
+    except MLClientError:
+        info = {}
+    _category_cache[category_id] = info
+    return info
+
+
 # =============================================================
 # Escrituras (write) — gateadas por is_write_enabled()
 # =============================================================

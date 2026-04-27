@@ -293,18 +293,23 @@
   <a href="/catalogo">← Volver al catálogo</a>
 </div>
 
-<div class="product-header">
-  <h1>{{ producto.titulo }}</h1>
-  <div class="badge-row">
-    <span class="pbadge pbadge-sku">{{ producto.sku }}</span>
-    {% if producto.categoria %}<span class="pbadge">{{ producto.categoria }}</span>{% endif %}
-    {% if producto.marca %}<span class="pbadge">{{ producto.marca }}</span>{% endif %}
-    {% if producto.activo %}
-      <span class="pbadge pbadge-success">● En catálogo</span>
-    {% else %}
-      <span class="pbadge pbadge-paused">● Archivado</span>
-    {% endif %}
+<div class="product-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+  <div style="flex: 1; min-width: 280px;">
+    <h1>{{ producto.titulo }}</h1>
+    <div class="badge-row">
+      <span class="pbadge pbadge-sku">{{ producto.sku }}</span>
+      {% if producto.categoria %}<span class="pbadge">{{ producto.categoria }}</span>{% endif %}
+      {% if producto.marca %}<span class="pbadge">{{ producto.marca }}</span>{% endif %}
+      {% if producto.activo %}
+        <span class="pbadge pbadge-success">● En catálogo</span>
+      {% else %}
+        <span class="pbadge pbadge-paused">● Archivado</span>
+      {% endif %}
+    </div>
   </div>
+  <a href="/catalogo/{{ producto.sku|urlencode }}/editar" class="btn btn-ghost">
+    ✎ Editar
+  </a>
 </div>
 
 <div class="stats-row">

@@ -24,6 +24,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 import pandas as pd
+import requests
 from sqlalchemy import func as sql_func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -537,14 +538,39 @@ def process_excel_upload(db: Session, file_bytes: bytes) -> UploadResult:
 # Listado y búsqueda (para el GET /catalogo)
 # =============================================================
 
+def list_categorias(db: Session) -> list[str]:
+    """Lista de categorías distintas, no-nulas, ordenadas alfabéticamente."""
+    rows = db.execute(
+        select(Producto.categoria)
+        .distinct()
+        .where(Producto.categoria.is_not(None))
+        .order_by(Producto.categoria)
+    ).all()
+    return [r[0] for r in rows if r[0]]
+
+
+def list_marcas(db: Session) -> list[str]:
+    """Lista de marcas distintas, no-nulas, ordenadas alfabéticamente."""
+    rows = db.execute(
+        select(Producto.marca)
+        .distinct()
+        .where(Producto.marca.is_not(None))
+        .order_by(Producto.marca)
+    ).all()
+    return [r[0] for r in rows if r[0]]
+
+
 def list_productos(
     db: Session,
     search: str = "",
     page: int = 1,
+    vinculadas: str = "",   # "si" → solo con ml_item_id, "no" → solo sin, "" → todas
+    categoria: str = "",
+    marca: str = "",
 ) -> tuple[list[dict], int]:
     """
     Devuelve (productos, total). Cada producto incluye `compat_count`.
-    `total` es el total de productos que matchean (para paginación).
+    `total` es el total de productos que matchean los filtros (para paginación).
     """
     # Subquery: cuántas compatibilidades tiene cada producto
     compat_count_sq = (
@@ -562,14 +588,30 @@ def list_productos(
     )
     count_q = select(sql_func.count(Producto.id))
 
+    # Aplicar filtros — cada uno se aplica a base_q y count_q en paralelo
+    extra_conds = []
+
     if search and search.strip():
         like = f"%{search.strip()}%"
-        cond = or_(
+        extra_conds.append(or_(
             Producto.sku.ilike(like),
             Producto.titulo.ilike(like),
             Producto.marca.ilike(like),
             Producto.categoria.ilike(like),
-        )
+        ))
+
+    if vinculadas == "si":
+        extra_conds.append(Producto.ml_item_id.is_not(None))
+    elif vinculadas == "no":
+        extra_conds.append(Producto.ml_item_id.is_(None))
+
+    if categoria:
+        extra_conds.append(Producto.categoria == categoria)
+
+    if marca:
+        extra_conds.append(Producto.marca == marca)
+
+    for cond in extra_conds:
         base_q = base_q.where(cond)
         count_q = count_q.where(cond)
 
@@ -1052,7 +1094,9 @@ def bulk_sync_oldest(db: Session, limit: int = 50) -> tuple[int, int, list[str]]
     errors: list[str] = []
     for sku in skus:
         try:
-            success, msg = sync_producto_from_ml(db, sku)
+            # Bulk sync = solo snapshot, sin descargar fotos ni tocar campos
+            # locales. Si querés hidratar un placeholder, usá el botón individual.
+            success, msg = sync_producto_from_ml(db, sku, hidratar=False)
         except Exception as e:
             success = False
             msg = f"{type(e).__name__}: {e}"
@@ -1062,6 +1106,66 @@ def bulk_sync_oldest(db: Session, limit: int = 50) -> tuple[int, int, list[str]]
             errors.append(f"{sku}: {msg}")
 
     return ok, len(skus), errors
+
+
+def update_producto_basic(
+    db: Session,
+    sku: str,
+    *,
+    titulo: Optional[str] = None,
+    descripcion: Optional[str] = None,
+    categoria: Optional[str] = None,
+    marca: Optional[str] = None,
+    precio_costo: Optional[Decimal] = None,
+    precio_final: Optional[Decimal] = None,
+    moneda: Optional[str] = None,
+    activo: Optional[bool] = None,
+) -> tuple[bool, str, dict]:
+    """
+    Actualiza los campos básicos de un producto desde el form de edición.
+    Devuelve (ok, mensaje, dict_de_cambios).
+
+    `dict_de_cambios` es {field: (old, new)} — útil para que el caller decida
+    si hace falta auto-pushear a ML (ej: si cambió el precio).
+    """
+    prod = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return False, f"SKU '{sku}' no existe", {}
+
+    cambios: dict = {}
+
+    def _set(field: str, new_val):
+        old = getattr(prod, field)
+        if old != new_val:
+            cambios[field] = (old, new_val)
+            setattr(prod, field, new_val)
+
+    if titulo is not None:
+        if not titulo.strip():
+            return False, "El título no puede quedar vacío", {}
+        _set("titulo", titulo.strip())
+    if descripcion is not None:
+        _set("descripcion", descripcion.strip() or None)
+    if categoria is not None:
+        _set("categoria", categoria.strip() or None)
+    if marca is not None:
+        _set("marca", marca.strip() or None)
+    if precio_costo is not None:
+        _set("precio_costo", precio_costo if precio_costo != "" else None)
+    if precio_final is not None:
+        _set("precio_final", precio_final if precio_final != "" else None)
+    if moneda is not None:
+        _set("moneda", (moneda.strip().upper() or "ARS")[:3])
+    if activo is not None:
+        _set("activo", bool(activo))
+
+    if not cambios:
+        return True, "Sin cambios", {}
+
+    db.commit()
+    return True, f"✓ {len(cambios)} campo{'' if len(cambios) == 1 else 's'} actualizado{'' if len(cambios) == 1 else 's'}", cambios
 
 
 def push_to_ml(
@@ -1139,13 +1243,68 @@ def push_to_ml(
     return False, " · ".join(errors)
 
 
-def sync_producto_from_ml(db: Session, sku: str) -> tuple[bool, str]:
+def _download_ml_photo(
+    db: Session,
+    producto_id: int,
+    sku: str,
+    url: str,
+    orden: int,
+) -> tuple[bool, str]:
     """
-    Pulla datos frescos del item en ML y los guarda como snapshot
-    (ml_stock, ml_precio, ml_status, ml_permalink, ml_last_synced_at).
+    Descarga una foto desde una URL pública (ej: ML CDN), la optimiza con
+    Pillow y la sube a R2. Crea el registro FotoProducto.
+    """
+    from . import storage as storage_mod
 
-    NO modifica stock_actual ni precio_final locales — solo registra
-    "esto es lo que ML reporta hoy" para que se vea drift en el panel.
+    if not storage_mod.is_configured():
+        return False, "R2 no configurado"
+
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+    except Exception as e:
+        return False, f"Error descargando: {e}"
+
+    filename = url.rsplit("/", 1)[-1] or "ml-foto.jpg"
+
+    try:
+        upload = storage_mod.upload_photo(response.content, sku, filename)
+    except Exception as e:
+        return False, f"Error subiendo a R2: {e}"
+
+    db.add(FotoProducto(
+        producto_id=producto_id,
+        storage_key=upload["storage_key"],
+        url=upload["url"],
+        orden=orden,
+        bytes_size=upload["bytes_size"],
+        width_px=upload["width_px"],
+        height_px=upload["height_px"],
+    ))
+    return True, ""
+
+
+def sync_producto_from_ml(
+    db: Session,
+    sku: str,
+    *,
+    hidratar: bool = True,
+) -> tuple[bool, str]:
+    """
+    Pulla datos frescos del item en ML.
+
+    Siempre actualiza el SNAPSHOT (ml_stock, ml_precio, ml_status, ml_permalink,
+    ml_last_synced_at) — útil para detectar drift entre DB y ML.
+
+    Si `hidratar=True` (default para sync individual), además **completa
+    campos vacíos del producto local** desde ML:
+      - titulo: si está como placeholder (titulo == sku), usa el título de ML
+      - precio_final: si está en None, usa el precio de ML
+      - categoria: si está en None, usa el nombre de la categoría de ML
+      - fotos: si no hay fotos cargadas en R2, descarga las de ML (max 10)
+
+    Si `hidratar=False` (usado por bulk_sync_oldest), solo snapshot — sin tocar
+    campos locales ni descargar fotos. Es ~50x más rápido.
 
     Devuelve (ok, mensaje).
     """
@@ -1167,7 +1326,7 @@ def sync_producto_from_ml(db: Session, sku: str) -> tuple[bool, str]:
     except ml_client.MLClientError as e:
         return False, f"Error consultando ML: {e}"
 
-    # Extraer campos
+    # ---- Snapshot (siempre) ----
     prod.ml_status = item.get("status")
     prod.ml_permalink = item.get("permalink") or prod.ml_permalink
     aq = item.get("available_quantity")
@@ -1177,16 +1336,67 @@ def sync_producto_from_ml(db: Session, sku: str) -> tuple[bool, str]:
         except (ValueError, TypeError):
             pass
     price = item.get("price")
+    ml_price_decimal: Optional[Decimal] = None
     if price is not None:
         try:
-            prod.ml_precio = Decimal(str(price))
+            ml_price_decimal = Decimal(str(price))
+            prod.ml_precio = ml_price_decimal
         except Exception:
             pass
     prod.ml_last_synced_at = datetime.now(timezone.utc)
 
+    # ---- Hidratación (solo si hidratar=True) ----
+    hidratado: list[str] = []
+
+    if hidratar:
+        # Título: si es placeholder (titulo == sku), reemplazar con el de ML
+        if prod.titulo == sku and item.get("title"):
+            prod.titulo = str(item["title"]).strip()[:500]
+            hidratado.append("título")
+
+        # Precio final: si está en None, usar precio de ML
+        if prod.precio_final is None and ml_price_decimal is not None:
+            prod.precio_final = ml_price_decimal
+            hidratado.append("precio")
+
+        # Categoría: si está en None, traer nombre de la categoría desde ML
+        if not prod.categoria and item.get("category_id"):
+            cat_info = ml_client.get_category(db, item["category_id"])
+            cat_name = cat_info.get("name")
+            if cat_name:
+                prod.categoria = str(cat_name)[:80]
+                hidratado.append("categoría")
+
+        # Fotos: si no hay fotos en R2, descargar las de ML
+        existing_photos = int(db.execute(
+            select(sql_func.count(FotoProducto.id))
+            .where(FotoProducto.producto_id == prod.id)
+        ).scalar() or 0)
+
+        if existing_photos == 0:
+            from . import storage as storage_mod
+            if storage_mod.is_configured():
+                pictures = item.get("pictures") or []
+                imported = 0
+                for i, pic in enumerate(pictures[:10]):
+                    pic_url = pic.get("secure_url") or pic.get("url")
+                    if not pic_url:
+                        continue
+                    ok_pic, _err = _download_ml_photo(
+                        db, prod.id, sku, pic_url, i
+                    )
+                    if ok_pic:
+                        imported += 1
+                if imported:
+                    hidratado.append(f"{imported} foto{'s' if imported != 1 else ''}")
+
     db.commit()
 
-    # Detectar drift y armar mensaje informativo
+    # ---- Mensaje ----
+    msg_parts = [f"estado ML: {prod.ml_status or '?'}"]
+    if hidratado:
+        msg_parts.append(f"hidratado: {', '.join(hidratado)}")
+
     drift_bits = []
     if prod.ml_stock is not None and prod.ml_stock != prod.stock_actual:
         drift_bits.append(f"stock DB={prod.stock_actual} ML={prod.ml_stock}")
@@ -1199,7 +1409,7 @@ def sync_producto_from_ml(db: Session, sku: str) -> tuple[bool, str]:
             f"precio DB=${prod.precio_final:,.0f} ML=${prod.ml_precio:,.0f}"
         )
 
-    msg = f"✓ Sync OK · estado ML: {prod.ml_status or '?'}"
+    msg = f"✓ Sync OK · {' · '.join(msg_parts)}"
     if drift_bits:
         msg += " · ⚠ drift: " + ", ".join(drift_bits)
 

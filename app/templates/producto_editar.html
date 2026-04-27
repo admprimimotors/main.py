@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Editar {{ producto.sku }} · Primi Motors{% endblock %}
+{% block page_title %}Editar producto{% endblock %}
+
+{% block content %}
+<style>
+  .breadcrumb {
+    color: var(--muted); font-size: 13px;
+    margin-bottom: 18px;
+  }
+  .breadcrumb a {
+    color: var(--muted-strong); transition: color .12s;
+  }
+  .breadcrumb a:hover { color: var(--brand-hover); }
+
+  .edit-form { display: flex; flex-direction: column; gap: 18px; }
+  .form-row {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .form-row label {
+    font-size: 12px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .form-row input[type=text],
+  .form-row input[type=number],
+  .form-row textarea,
+  .form-row select {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 14px; outline: none;
+    font-family: inherit;
+    transition: border-color .15s;
+    width: 100%;
+  }
+  .form-row input:focus,
+  .form-row textarea:focus,
+  .form-row select:focus { border-color: var(--brand); }
+  .form-row textarea { min-height: 100px; resize: vertical; }
+  .form-row .helper { font-size: 12px; color: var(--muted); }
+
+  .form-grid {
+    display: grid; gap: 18px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .form-actions {
+    display: flex; gap: 10px; justify-content: flex-end; align-items: center;
+    margin-top: 8px; padding-top: 18px;
+    border-top: 1px solid var(--border-soft);
+  }
+
+  .form-row .activo-row {
+    display: flex; gap: 10px; align-items: center;
+    padding: 10px 14px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .form-row .activo-row input[type=checkbox] { width: auto; }
+
+  .alert {
+    padding: 12px 16px; border-radius: 8px; font-size: 13px;
+    margin-bottom: 18px; border: 1px solid; line-height: 1.5;
+  }
+  .alert-warning {
+    background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d;
+  }
+  .alert code {
+    background: rgba(0,0,0,.25); padding: 1px 6px; border-radius: 4px; font-size: 11px;
+  }
+</style>
+
+<div class="breadcrumb">
+  <a href="/catalogo/{{ producto.sku|urlencode }}">← Volver al detalle</a>
+</div>
+
+<div class="page-intro">
+  <h2>Editar producto</h2>
+  <p>SKU: <code style="background: var(--panel-2); padding: 2px 8px; border-radius: 4px; color: var(--brand-hover);">{{ producto.sku }}</code></p>
+</div>
+
+{% if producto.ml_item_id and ml_write_enabled %}
+<div class="alert alert-warning">
+  Este producto está vinculado a ML y el write sync está activo. Si cambiás el <strong>precio final</strong>,
+  se va a pushear automáticamente a la publicación de Mercado Libre al guardar.
+</div>
+{% endif %}
+
+<form method="post" action="/catalogo/{{ producto.sku|urlencode }}/editar" class="edit-form card">
+
+  <div class="form-row">
+    <label for="titulo">Título *</label>
+    <input id="titulo" name="titulo" type="text" maxlength="500" required
+           value="{{ producto.titulo or '' }}" />
+    <span class="helper">El título que ven los compradores. Para placeholders, suele estar igual al SKU hasta que se completa.</span>
+  </div>
+
+  <div class="form-row">
+    <label for="descripcion">Descripción</label>
+    <textarea id="descripcion" name="descripcion">{{ producto.descripcion or '' }}</textarea>
+  </div>
+
+  <div class="form-grid">
+    <div class="form-row">
+      <label for="categoria">Categoría</label>
+      <input id="categoria" name="categoria" type="text" maxlength="80"
+             list="categorias-list"
+             value="{{ producto.categoria or '' }}" />
+      <datalist id="categorias-list">
+        {% for cat in categorias_disponibles %}
+        <option value="{{ cat }}"></option>
+        {% endfor %}
+      </datalist>
+    </div>
+
+    <div class="form-row">
+      <label for="marca">Marca</label>
+      <input id="marca" name="marca" type="text" maxlength="80"
+             list="marcas-list"
+             value="{{ producto.marca or '' }}" />
+      <datalist id="marcas-list">
+        {% for m in marcas_disponibles %}
+        <option value="{{ m }}"></option>
+        {% endfor %}
+      </datalist>
+    </div>
+  </div>
+
+  <div class="form-grid">
+    <div class="form-row">
+      <label for="precio_costo">Precio costo</label>
+      <input id="precio_costo" name="precio_costo" type="number" step="0.01" min="0"
+             value="{{ producto.precio_costo if producto.precio_costo is not none else '' }}" />
+    </div>
+
+    <div class="form-row">
+      <label for="precio_final">Precio final</label>
+      <input id="precio_final" name="precio_final" type="number" step="0.01" min="0"
+             value="{{ producto.precio_final if producto.precio_final is not none else '' }}" />
+      {% if producto.ml_item_id and ml_write_enabled %}
+      <span class="helper" style="color: #fcd34d;">↑ Cambiar este valor pushea precio a ML automáticamente</span>
+      {% endif %}
+    </div>
+
+    <div class="form-row">
+      <label for="moneda">Moneda</label>
+      <select id="moneda" name="moneda">
+        <option value="ARS" {% if (producto.moneda or 'ARS') == 'ARS' %}selected{% endif %}>ARS — Pesos argentinos</option>
+        <option value="USD" {% if producto.moneda == 'USD' %}selected{% endif %}>USD — Dólares</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <label class="activo-row" for="activo">
+      <input id="activo" name="activo" type="checkbox" value="on"
+             {% if producto.activo %}checked{% endif %} />
+      <span>
+        <strong>En catálogo</strong> — visible y operable. Si lo destildás queda <strong>archivado</strong>
+        (preservado en DB, pero filtrado del listado por defecto).
+      </span>
+    </label>
+  </div>
+
+  <div class="form-actions">
+    <a href="/catalogo/{{ producto.sku|urlencode }}" class="btn btn-ghost">Cancelar</a>
+    <button type="submit" class="btn">Guardar cambios</button>
+  </div>
+</form>
+{% endblock %}

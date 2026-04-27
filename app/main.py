@@ -29,7 +29,7 @@ from . import auth, catalogo, database, ml_client, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.12.0"
+APP_VERSION = "0.13.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -182,9 +182,21 @@ def catalogo_view(
     db: DbSession = Depends(get_db),
     q: str = "",
     page: int = 1,
+    vinculadas: str = "",
+    categoria: str = "",
+    marca: str = "",
 ):
-    """Listado paginado de productos con buscador."""
-    productos, total = catalogo.list_productos(db, search=q, page=page)
+    """Listado paginado de productos con buscador y filtros."""
+    productos, total = catalogo.list_productos(
+        db,
+        search=q,
+        page=page,
+        vinculadas=vinculadas,
+        categoria=categoria,
+        marca=marca,
+    )
+    categorias_disponibles = catalogo.list_categorias(db)
+    marcas_disponibles = catalogo.list_marcas(db)
     flash = request.session.pop("flash", None)
     return templates.TemplateResponse(
         request,
@@ -199,6 +211,11 @@ def catalogo_view(
             "page": page,
             "page_size": catalogo.PAGE_SIZE,
             "flash": flash,
+            "vinculadas": vinculadas,
+            "categoria": categoria,
+            "marca": marca,
+            "categorias_disponibles": categorias_disponibles,
+            "marcas_disponibles": marcas_disponibles,
         },
     )
 
@@ -689,6 +706,113 @@ def catalogo_stock_update(
         flash_type = "success" if push_ok else "warning"
     else:
         flash_type = "success" if ok else "error"
+
+    request.session["flash"] = {"type": flash_type, "msg": msg}
+    return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+
+@app.get("/catalogo/{sku}/editar", response_class=HTMLResponse)
+def catalogo_editar_form(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Form de edición de campos básicos del producto."""
+    detail = catalogo.get_producto_detail(db, sku)
+    if detail is None:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No se encontró el producto con SKU '{sku}'.",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "producto_editar.html",
+        {
+            "user": user,
+            "active": "catalogo",
+            "version": APP_VERSION,
+            "producto": detail,
+            "categorias_disponibles": catalogo.list_categorias(db),
+            "marcas_disponibles": catalogo.list_marcas(db),
+            "ml_write_enabled": ml_client.is_write_enabled(),
+        },
+    )
+
+
+@app.post("/catalogo/{sku}/editar")
+def catalogo_editar_save(
+    request: Request,
+    sku: str,
+    titulo: str = Form(...),
+    descripcion: str = Form(default=""),
+    categoria: str = Form(default=""),
+    marca: str = Form(default=""),
+    precio_costo: str = Form(default=""),
+    precio_final: str = Form(default=""),
+    moneda: str = Form(default="ARS"),
+    activo: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Guarda cambios del form. Si cambió precio y write sync activo, pushea a ML."""
+    from decimal import Decimal, InvalidOperation
+
+    def _to_dec(s: str):
+        s = (s or "").strip().replace(",", ".")
+        if not s:
+            return None
+        try:
+            return Decimal(s)
+        except (InvalidOperation, ValueError):
+            return None
+
+    activo_bool = activo.strip().lower() in ("on", "true", "1", "yes")
+
+    try:
+        ok, msg, cambios = catalogo.update_producto_basic(
+            db,
+            sku,
+            titulo=titulo,
+            descripcion=descripcion,
+            categoria=categoria,
+            marca=marca,
+            precio_costo=_to_dec(precio_costo),
+            precio_final=_to_dec(precio_final),
+            moneda=moneda,
+            activo=activo_bool,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse(f"/catalogo/{sku}/editar", status_code=303)
+
+    if not ok:
+        request.session["flash"] = {"type": "error", "msg": msg}
+        return RedirectResponse(f"/catalogo/{sku}/editar", status_code=303)
+
+    # Si cambió el precio_final y el write sync está activo, auto-pushear precio a ML
+    if "precio_final" in cambios and ml_client.is_write_enabled():
+        try:
+            push_ok, push_msg = catalogo.push_to_ml(
+                db, sku, push_stock=False, push_price=True
+            )
+        except Exception as e:
+            push_ok = False
+            push_msg = f"ML push falló: {type(e).__name__}: {e}"
+        msg = f"{msg} · {push_msg}"
+        flash_type = "success" if push_ok else "warning"
+    else:
+        flash_type = "success"
 
     request.session["flash"] = {"type": flash_type, "msg": msg}
     return RedirectResponse(f"/catalogo/{sku}", status_code=303)

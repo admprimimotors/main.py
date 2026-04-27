@@ -39,17 +39,33 @@
     cursor: pointer; font-size: 12px;
   }
 
-  .search-form {
+  .filter-form {
     display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap;
+    align-items: center;
   }
   .search-input {
-    flex: 1 1 320px;
+    flex: 1 1 280px;
     background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 14px; font-size: 14px; outline: none;
     transition: border-color .15s;
   }
   .search-input:focus { border-color: var(--brand); }
+  .filter-select {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 13px; outline: none;
+    cursor: pointer; min-width: 140px;
+    transition: border-color .15s;
+  }
+  .filter-select:focus { border-color: var(--brand); }
+  .filter-active-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 500;
+    background: var(--brand-soft); color: var(--brand-hover);
+    border: 1px solid rgba(160,25,22,.30);
+  }
 
   .data-table {
     width: 100%;
@@ -176,10 +192,34 @@
   </div>
 </div>
 
-<form method="get" action="/catalogo" class="search-form">
-  <input type="search" name="q" value="{{ search }}" placeholder="Buscar por SKU, título, marca o categoría…" class="search-input" />
-  <button type="submit" class="btn">Buscar</button>
-  {% if search %}<a href="/catalogo" class="btn btn-ghost">Limpiar</a>{% endif %}
+<form method="get" action="/catalogo" class="filter-form">
+  <input type="search" name="q" value="{{ search }}"
+         placeholder="Buscar por SKU, título, marca o categoría…" class="search-input" />
+
+  <select name="vinculadas" class="filter-select">
+    <option value="" {% if not vinculadas %}selected{% endif %}>ML: todas</option>
+    <option value="si" {% if vinculadas == 'si' %}selected{% endif %}>ML: vinculadas</option>
+    <option value="no" {% if vinculadas == 'no' %}selected{% endif %}>ML: sin vincular</option>
+  </select>
+
+  <select name="categoria" class="filter-select">
+    <option value="">Categoría: todas</option>
+    {% for cat in categorias_disponibles %}
+    <option value="{{ cat }}" {% if categoria == cat %}selected{% endif %}>{{ cat }}</option>
+    {% endfor %}
+  </select>
+
+  <select name="marca" class="filter-select">
+    <option value="">Marca: todas</option>
+    {% for m in marcas_disponibles %}
+    <option value="{{ m }}" {% if marca == m %}selected{% endif %}>{{ m }}</option>
+    {% endfor %}
+  </select>
+
+  <button type="submit" class="btn">Filtrar</button>
+  {% if search or vinculadas or categoria or marca %}
+  <a href="/catalogo" class="btn btn-ghost">Limpiar</a>
+  {% endif %}
 </form>
 
 {% if productos %}
@@ -241,16 +281,17 @@
 </div>
 
 {% set total_pages = ((total + page_size - 1) // page_size) if total > 0 else 1 %}
+{% set filter_qs = 'q=' ~ (search|urlencode) ~ '&vinculadas=' ~ (vinculadas|urlencode) ~ '&categoria=' ~ (categoria|urlencode) ~ '&marca=' ~ (marca|urlencode) %}
 {% if total_pages > 1 %}
 <div class="pagination">
   {% if page > 1 %}
-    <a href="?q={{ search|urlencode }}&page={{ page - 1 }}" class="btn btn-ghost">← Anterior</a>
+    <a href="?{{ filter_qs }}&page={{ page - 1 }}" class="btn btn-ghost">← Anterior</a>
   {% endif %}
   <span style="color: var(--muted); padding: 0 14px; font-size: 13px;">
     Página {{ page }} de {{ total_pages }}
   </span>
   {% if page < total_pages %}
-    <a href="?q={{ search|urlencode }}&page={{ page + 1 }}" class="btn btn-ghost">Siguiente →</a>
+    <a href="?{{ filter_qs }}&page={{ page + 1 }}" class="btn btn-ghost">Siguiente →</a>
   {% endif %}
 </div>
 {% endif %}
