@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% block title %}Precios · Primi Motors{% endblock %}
+{% block page_title %}Precios{% endblock %}
+
+{% block content %}
+<style>
+  .alert {
+    padding: 12px 16px; border-radius: 8px; font-size: 13px;
+    margin-bottom: 18px; border: 1px solid; line-height: 1.5;
+  }
+  .alert-success { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.40); color: #86efac; }
+  .alert-warning { background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d; }
+  .alert-error   { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+  .alert code { background: rgba(0,0,0,.25); padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+
+  .form-grid {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+  .form-row { display: flex; flex-direction: column; gap: 6px; }
+  .form-row label {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .form-row select,
+  .form-row input[type=number],
+  .form-row input[type=text] {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 14px; outline: none;
+    font-family: inherit;
+    transition: border-color .15s;
+  }
+  .form-row select:focus,
+  .form-row input:focus { border-color: var(--brand); }
+  .form-row .helper { font-size: 11px; color: var(--muted); }
+
+  .upload-form {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .upload-form input[type=file] {
+    flex: 1 1 240px;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 13px;
+    cursor: pointer;
+  }
+  .upload-form input[type=file]::file-selector-button {
+    background: var(--panel); color: var(--muted-strong);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; margin-right: 12px;
+    cursor: pointer; font-size: 12px;
+  }
+  .help-text {
+    color: var(--muted); font-size: 12px; margin-top: 12px;
+    line-height: 1.6;
+  }
+  .help-text code {
+    background: var(--panel-2); padding: 1px 6px; border-radius: 4px;
+    color: var(--brand-hover); font-size: 11px;
+  }
+
+  .preview-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .preview-table thead th {
+    text-align: left; padding: 10px 14px;
+    color: var(--muted); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.4px; font-size: 11px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--panel-2);
+  }
+  .preview-table tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-soft);
+    color: var(--muted-strong);
+    font-variant-numeric: tabular-nums;
+  }
+  .preview-table tbody tr:last-child td { border-bottom: none; }
+  .preview-table code {
+    background: var(--panel-2); padding: 2px 6px; border-radius: 4px;
+    color: var(--brand-hover); font-size: 12px;
+  }
+  .delta-up { color: #fcd34d; }
+  .delta-down { color: #86efac; }
+
+  .scope-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 500;
+    background: var(--panel-2); color: var(--muted-strong);
+    border: 1px solid var(--border);
+  }
+</style>
+
+{% if flash %}
+<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>
+{% endif %}
+
+<div class="page-intro">
+  <h2>Precios</h2>
+  <p>Cambios masivos por fórmula con preview, o upload de Excel solo de precios.</p>
+</div>
+
+{# ============================================================== #}
+{# Card 1: Cambio masivo por fórmula                             #}
+{# ============================================================== #}
+<div class="card" style="margin-bottom: 22px;">
+  <div class="card-title">Cambio masivo por fórmula</div>
+
+  <form method="post" action="/precios/preview">
+    <div class="form-grid">
+      <div class="form-row">
+        <label for="operacion">Operación</label>
+        <select id="operacion" name="operacion" required>
+          {% for code, label in operaciones.items() %}
+          <option value="{{ code }}" {% if form.operacion == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="valor">Valor</label>
+        <input id="valor" name="valor" type="number" step="0.01" min="0" required
+               value="{{ form.valor }}"
+               placeholder="ej: 15 (para +15%) o 1.15 (para ×1.15)" />
+      </div>
+
+      <div class="form-row">
+        <label for="target">Aplicar a</label>
+        <select id="target" name="target" required>
+          {% for code, label in targets.items() %}
+          <option value="{{ code }}" {% if form.target == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="redondeo">Redondeo</label>
+        <select id="redondeo" name="redondeo">
+          {% for r, label in redondeos.items() %}
+          <option value="{{ r }}" {% if form.redondeo == r %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div style="margin-top: 18px;">
+      <div style="font-size: 12px; color: var(--muted); margin-bottom: 8px;">
+        Filtros de scope (los mismos del catálogo) — definen qué productos se afectan:
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label for="search">Buscar</label>
+          <input id="search" name="search" type="text" value="{{ form.search }}"
+                 placeholder="SKU, título, marca o categoría" />
+        </div>
+        <div class="form-row">
+          <label for="categoria">Categoría</label>
+          <select id="categoria" name="categoria">
+            <option value="">Todas</option>
+            {% for cat in categorias_disponibles %}
+            <option value="{{ cat }}" {% if form.categoria == cat %}selected{% endif %}>{{ cat }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="marca">Marca</label>
+          <select id="marca" name="marca">
+            <option value="">Todas</option>
+            {% for m in marcas_disponibles %}
+            <option value="{{ m }}" {% if form.marca == m %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="vinculadas">ML</label>
+          <select id="vinculadas" name="vinculadas">
+            <option value="">Todas</option>
+            <option value="si" {% if form.vinculadas == 'si' %}selected{% endif %}>Vinculadas</option>
+            <option value="no" {% if form.vinculadas == 'no' %}selected{% endif %}>Sin vincular</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 18px; display: flex; gap: 10px; align-items: center;">
+      <button type="submit" class="btn">Calcular preview</button>
+      <span style="font-size: 12px; color: var(--muted);">
+        El preview NO aplica nada — vas a poder revisar y confirmar después.
+      </span>
+    </div>
+  </form>
+</div>
+
+{# ============================================================== #}
+{# Card 2: Upload Excel solo precios                             #}
+{# ============================================================== #}
+<div class="card" style="margin-bottom: 22px;">
+  <div class="card-title">Subir Excel solo precios</div>
+  <form method="post" action="/precios/upload" enctype="multipart/form-data" class="upload-form">
+    <input type="file" name="archivo" accept=".xlsx,.xls" required />
+    <button type="submit" class="btn">Subir Excel</button>
+    <a href="/precios/template" class="btn btn-ghost">Descargar template</a>
+  </form>
+  <div class="help-text">
+    Excel con columnas <code>SKU</code> + <code>Precio_Costo</code> y/o <code>Precio_Final</code>.
+    Solo actualiza precios — el resto del producto (título, stock, ficha, vínculos ML) queda intacto.
+    Útil cuando ya tenés los precios calculados en otro lado y querés cargarlos directo.
+  </div>
+</div>
+
+{# ============================================================== #}
+{# Card 3: Preview de cambios (solo si hay)                      #}
+{# ============================================================== #}
+{% if preview %}
+<div class="card" style="margin-bottom: 22px;">
+  <div class="card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+    <span>Preview de cambios — {{ preview.changes|length }} cambio{{ '' if preview.changes|length == 1 else 's' }} pendiente{{ '' if preview.changes|length == 1 else 's' }}</span>
+    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+      <span class="scope-chip">{{ operaciones[form.operacion] }} {{ form.valor }}</span>
+      <span class="scope-chip">{{ targets[form.target] }}</span>
+      {% if form.redondeo and form.redondeo|int > 0 %}<span class="scope-chip">{{ redondeos[form.redondeo|int] }}</span>{% endif %}
+      {% if form.categoria %}<span class="scope-chip">cat: {{ form.categoria }}</span>{% endif %}
+      {% if form.marca %}<span class="scope-chip">marca: {{ form.marca }}</span>{% endif %}
+      {% if form.vinculadas %}<span class="scope-chip">ML: {{ form.vinculadas }}</span>{% endif %}
+    </div>
+  </div>
+
+  {% if preview.changes %}
+  <div style="overflow-x: auto; max-height: 500px; overflow-y: auto;">
+    <table class="preview-table">
+      <thead>
+        <tr>
+          <th>SKU</th>
+          <th>Título</th>
+          <th>Campo</th>
+          <th class="num" style="text-align: right;">Actual</th>
+          <th class="num" style="text-align: right;">Nuevo</th>
+          <th class="num" style="text-align: right;">Δ</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in preview.changes[:500] %}
+        <tr>
+          <td><code>{{ c.sku }}</code></td>
+          <td>{{ c.titulo }}</td>
+          <td>{{ 'Costo' if c.campo == 'precio_costo' else 'Final' }}</td>
+          <td style="text-align: right;">${{ "{:,.0f}".format(c.valor_actual|float) }}</td>
+          <td style="text-align: right;"><strong>${{ "{:,.0f}".format(c.valor_nuevo|float) }}</strong></td>
+          <td style="text-align: right;" class="{{ 'delta-up' if c.delta > 0 else 'delta-down' }}">
+            {{ '+' if c.delta > 0 else '' }}${{ "{:,.0f}".format(c.delta|float) }}
+            ({{ '+' if c.delta_pct > 0 else '' }}{{ "{:.1f}".format(c.delta_pct|float) }}%)
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if preview.changes|length > 500 %}
+    <div style="padding: 14px; text-align: center; color: var(--muted); font-size: 12px; background: var(--panel-2);">
+      Mostrando los primeros 500. Total: {{ preview.changes|length }} cambios.
+    </div>
+    {% endif %}
+  </div>
+
+  <form method="post" action="/precios/apply" style="margin-top: 18px;">
+    {# Re-pasamos los mismos params al apply #}
+    <input type="hidden" name="operacion" value="{{ form.operacion }}" />
+    <input type="hidden" name="valor" value="{{ form.valor }}" />
+    <input type="hidden" name="target" value="{{ form.target }}" />
+    <input type="hidden" name="redondeo" value="{{ form.redondeo }}" />
+    <input type="hidden" name="search" value="{{ form.search }}" />
+    <input type="hidden" name="categoria" value="{{ form.categoria }}" />
+    <input type="hidden" name="marca" value="{{ form.marca }}" />
+    <input type="hidden" name="vinculadas" value="{{ form.vinculadas }}" />
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <button type="submit" class="btn"
+              onclick="return confirm('Aplicar {{ preview.changes|length }} cambios? Los precios viejos se sobreescriben — esto NO es reversible automáticamente.');">
+        Aplicar {{ preview.changes|length }} cambio{{ '' if preview.changes|length == 1 else 's' }}
+      </button>
+      <a href="/precios" class="btn btn-ghost">Cancelar</a>
+      <span style="font-size: 12px; color: var(--muted); margin-left: auto;">
+        Después podés ir a <a href="/catalogo?{% if form.categoria %}categoria={{ form.categoria|urlencode }}&amp;{% endif %}{% if form.marca %}marca={{ form.marca|urlencode }}&amp;{% endif %}{% if form.vinculadas %}vinculadas={{ form.vinculadas }}{% endif %}" style="color: var(--brand-hover);">/catalogo con esos filtros</a>
+        y "↑ Push 50 más antiguos" para sincronizar a ML.
+      </span>
+    </div>
+  </form>
+  {% else %}
+  <div style="padding: 24px; text-align: center; color: var(--muted); font-size: 13px;">
+    La fórmula no produce cambios sobre los productos del scope.
+    Probá distintos parámetros o ampliá los filtros.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

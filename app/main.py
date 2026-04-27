@@ -18,6 +18,7 @@ import os
 import platform
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -25,11 +26,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session as DbSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, catalogo, database, ml_client, stock, storage
+from . import auth, catalogo, database, ml_client, precios, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.14.0"
+APP_VERSION = "0.15.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1034,6 +1035,258 @@ def catalogo_ml_push(
 
 
 # ===============================================================
+# Precios — cambios masivos por fórmula + Excel solo precios
+# ===============================================================
+
+# Defaults para el form (usados también para repoblar después de un POST)
+_PRECIOS_FORM_DEFAULTS = {
+    "operacion": "porc_inc",
+    "valor": "",
+    "target": "final",
+    "redondeo": 0,
+    "search": "",
+    "categoria": "",
+    "marca": "",
+    "vinculadas": "",
+}
+
+
+def _precios_render(
+    request: Request,
+    user: str,
+    db: DbSession,
+    form: dict,
+    preview: Optional[dict] = None,
+):
+    """Helper: renderiza precios.html con form + preview opcional."""
+    return templates.TemplateResponse(
+        request,
+        "precios.html",
+        {
+            "user": user,
+            "active": "precios",
+            "version": APP_VERSION,
+            "operaciones": precios.OPERACIONES,
+            "targets": precios.TARGETS,
+            "redondeos": precios.REDONDEOS,
+            "categorias_disponibles": catalogo.list_categorias(db),
+            "marcas_disponibles": catalogo.list_marcas(db),
+            "form": form,
+            "preview": preview,
+            "flash": request.session.pop("flash", None),
+        },
+    )
+
+
+@app.get("/precios", response_class=HTMLResponse)
+def precios_view(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Página principal del módulo Precios — form vacío, sin preview."""
+    return _precios_render(request, user, db, form=dict(_PRECIOS_FORM_DEFAULTS))
+
+
+@app.post("/precios/preview", response_class=HTMLResponse)
+def precios_preview(
+    request: Request,
+    operacion: str = Form(...),
+    valor: str = Form(...),
+    target: str = Form(...),
+    redondeo: str = Form(default="0"),
+    search: str = Form(default=""),
+    categoria: str = Form(default=""),
+    marca: str = Form(default=""),
+    vinculadas: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Calcula los cambios sin aplicarlos y muestra preview."""
+    from decimal import Decimal, InvalidOperation
+
+    form = {
+        "operacion": operacion,
+        "valor": valor,
+        "target": target,
+        "redondeo": int(redondeo) if redondeo.isdigit() else 0,
+        "search": search,
+        "categoria": categoria,
+        "marca": marca,
+        "vinculadas": vinculadas,
+    }
+
+    try:
+        valor_dec = Decimal(valor.strip().replace(",", "."))
+    except (InvalidOperation, ValueError, AttributeError):
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "Valor inválido — tiene que ser un número.",
+        }
+        return _precios_render(request, user, db, form=form)
+
+    try:
+        changes = precios.compute_precio_changes(
+            db,
+            operacion=operacion,
+            valor=valor_dec,
+            target=target,
+            redondeo=form["redondeo"],
+            search=search,
+            categoria=categoria,
+            marca=marca,
+            vinculadas=vinculadas,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error calculando preview: {type(e).__name__}: {e}",
+        }
+        return _precios_render(request, user, db, form=form)
+
+    return _precios_render(
+        request, user, db, form=form, preview={"changes": changes}
+    )
+
+
+@app.post("/precios/apply")
+def precios_apply(
+    request: Request,
+    operacion: str = Form(...),
+    valor: str = Form(...),
+    target: str = Form(...),
+    redondeo: str = Form(default="0"),
+    search: str = Form(default=""),
+    categoria: str = Form(default=""),
+    marca: str = Form(default=""),
+    vinculadas: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Re-computa los cambios con los mismos parámetros y los aplica.
+    Re-computar (vs guardar la lista del preview) garantiza coherencia
+    si la DB cambió entre preview y apply (race condition mínima).
+    """
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        valor_dec = Decimal(valor.strip().replace(",", "."))
+    except (InvalidOperation, ValueError, AttributeError):
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "Valor inválido en apply.",
+        }
+        return RedirectResponse("/precios", status_code=303)
+
+    redondeo_int = int(redondeo) if redondeo.isdigit() else 0
+
+    try:
+        changes = precios.compute_precio_changes(
+            db,
+            operacion=operacion,
+            valor=valor_dec,
+            target=target,
+            redondeo=redondeo_int,
+            search=search,
+            categoria=categoria,
+            marca=marca,
+            vinculadas=vinculadas,
+        )
+        aplicados = precios.apply_precio_changes(db, changes)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error aplicando cambios: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/precios", status_code=303)
+
+    request.session["flash"] = {
+        "type": "success",
+        "msg": (
+            f"✓ {aplicados} producto{'' if aplicados == 1 else 's'} actualizado{'' if aplicados == 1 else 's'} "
+            f"con {len(changes)} cambio{'' if len(changes) == 1 else 's'} de precio. "
+            "Para sincronizar con ML, andá a /catalogo y usá ↑ Push masivo."
+        ),
+    }
+    return RedirectResponse("/precios", status_code=303)
+
+
+@app.post("/precios/upload")
+async def precios_upload(
+    request: Request,
+    archivo: UploadFile = File(...),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Excel solo precios: SKU + Precio_Costo y/o Precio_Final."""
+    fname = (archivo.filename or "").lower()
+    if not fname.endswith((".xlsx", ".xls")):
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "El archivo debe ser .xlsx o .xls",
+        }
+        return RedirectResponse("/precios", status_code=303)
+
+    try:
+        file_bytes = await archivo.read()
+        result = precios.process_precios_upload(db, file_bytes)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/precios", status_code=303)
+
+    if result.ok:
+        request.session["flash"] = {
+            "type": "success",
+            "msg": f"✓ {result.actualizados} producto{'' if result.actualizados == 1 else 's'} actualizado{'' if result.actualizados == 1 else 's'}.",
+        }
+    else:
+        msg = (
+            f"Procesado con errores. Actualizados: {result.actualizados}. "
+            f"{len(result.errores)} errores: " + " · ".join(result.errores[:5])
+        )
+        if len(result.errores) > 5:
+            msg += f" (+{len(result.errores) - 5} más)"
+        request.session["flash"] = {
+            "type": "warning" if result.actualizados else "error",
+            "msg": msg,
+        }
+    return RedirectResponse("/precios", status_code=303)
+
+
+@app.get("/precios/template")
+def precios_template(user: str = Depends(auth.require_user)):
+    """Excel template del módulo Precios."""
+    excel_bytes = precios.generate_precios_template()
+    return Response(
+        content=excel_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": 'attachment; filename="primi_motors_precios_template.xlsx"'
+        },
+    )
+
+
+# ===============================================================
 # Stubs — secciones todavía sin construir
 # ===============================================================
 # Cada feature real va a reemplazar uno de estos handlers cuando esté lista.
@@ -1043,12 +1296,10 @@ def catalogo_ml_push(
 _STUBS = [
     # "catalogo" ya no es stub — vive en su propio módulo (app/catalogo.py + rutas más abajo)
     # "stock" ya no es stub — vive en app/stock.py + rutas dedicadas
+    # "precios" ya no es stub — vive en app/precios.py + rutas dedicadas
     ("publicaciones", "Publicaciones ML",
      "Estado de los ítems publicados en Mercado Libre — pausar, "
      "republicar y ver estadísticas de cada uno."),
-    ("precios", "Precios",
-     "Cambios masivos de precio, márgenes por categoría y manejo "
-     "de listas de precios."),
     ("clientes", "Clientes",
      "Historial de compras, remitos y notas de crédito por cliente."),
     ("mensajes", "Mensajes ML",

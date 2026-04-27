@@ -336,6 +336,30 @@
     <div class="value">{{ producto.stock_actual }}</div>
     <div class="delta">unidades disponibles</div>
   </div>
+
+  {# Margen implícito = (final - costo) / costo, solo si ambos están seteados y costo > 0 #}
+  {% set has_both = (producto.precio_costo is not none and producto.precio_final is not none and producto.precio_costo > 0) %}
+  {% if has_both %}
+    {% set margen_pct = ((producto.precio_final - producto.precio_costo) / producto.precio_costo * 100)|float %}
+    {% set ganancia = (producto.precio_final - producto.precio_costo)|float %}
+    {# Color por rango — tu margen típico es 40-50% #}
+    {% if margen_pct < 30 %}{% set margen_color = '#fca5a5' %}
+    {% elif margen_pct < 40 %}{% set margen_color = '#fcd34d' %}
+    {% else %}{% set margen_color = '#86efac' %}{% endif %}
+  {% endif %}
+
+  <div class="card stat">
+    <h3>Margen</h3>
+    {% if has_both %}
+    <div class="value" style="color: {{ margen_color }};">{{ "{:.0f}".format(margen_pct) }}%</div>
+    <div class="delta">
+      ganancia: ${{ "{:,.0f}".format(ganancia) }} {{ producto.moneda }}
+    </div>
+    {% else %}
+    <div class="value" style="color: var(--muted);">—</div>
+    <div class="delta">{% if producto.precio_costo is none %}falta costo{% elif producto.precio_final is none %}falta final{% else %}costo en 0{% endif %}</div>
+    {% endif %}
+  </div>
 </div>
 
 <div class="card" style="margin-bottom: 18px;">
