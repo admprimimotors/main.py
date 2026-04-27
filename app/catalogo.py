@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
@@ -663,6 +664,8 @@ def get_producto_detail(db: Session, sku: str) -> Optional[dict]:
         "ml_item_id": prod.ml_item_id,
         "ml_permalink": prod.ml_permalink,
         "ml_status": prod.ml_status,
+        "ml_stock": prod.ml_stock,
+        "ml_precio": prod.ml_precio,
         "ml_last_synced_at": prod.ml_last_synced_at,
         "created_at": prod.created_at,
         "updated_at": prod.updated_at,
@@ -822,3 +825,226 @@ def delete_foto(db: Session, foto_id: int) -> tuple[bool, str]:
     db.delete(foto)
     db.commit()
     return True, "Foto eliminada"
+
+
+# =============================================================
+# Bulk linkeo SKU ↔ ML_Item_ID
+# =============================================================
+
+@dataclass
+class MLLinkUploadResult:
+    vinculados: int = 0
+    sin_cambio: int = 0
+    errores: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return len(self.errores) == 0
+
+
+# Aliases específicos para el Excel de linkeo (más liberal que el master)
+_ML_LINK_ALIASES = {
+    "sku": "sku",
+    "codigo": "sku",
+    "ml_item_id": "ml_item_id",
+    "item_id": "ml_item_id",
+    "ml_id": "ml_item_id",
+    "mlid": "ml_item_id",
+    "ml_permalink": "ml_permalink",
+    "permalink": "ml_permalink",
+    "ml_url": "ml_permalink",
+    "url": "ml_permalink",
+}
+
+
+def process_ml_link_upload(db: Session, file_bytes: bytes) -> MLLinkUploadResult:
+    """
+    Procesa un Excel simple con SKU + ML_Item_ID (+ ML_Permalink opcional).
+    Solo actualiza esos campos — no toca stock, precios, ficha, ni nada más.
+    """
+    result = MLLinkUploadResult()
+
+    try:
+        sheets = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+    except Exception as e:
+        result.errores.append(f"No se pudo leer el Excel: {e}")
+        return result
+
+    # Buscar la primera hoja con columnas SKU + ML_Item_ID
+    target_df = None
+    for _name, df in sheets.items():
+        df_copy = df.copy()
+        df_copy.columns = [_norm_col(c) for c in df_copy.columns]
+        cols = set(df_copy.columns)
+        has_sku = any(c in cols for c in ("sku", "codigo"))
+        has_ml = any(c in cols for c in ("ml_item_id", "item_id", "ml_id", "mlid"))
+        if has_sku and has_ml:
+            target_df = df_copy
+            break
+
+    if target_df is None:
+        result.errores.append(
+            "Ninguna hoja tiene columnas SKU y ML_Item_ID"
+        )
+        return result
+
+    # Mapear columnas presentes a campos
+    field_to_col: dict[str, str] = {}
+    for col in target_df.columns:
+        if not col:
+            continue
+        target = _ML_LINK_ALIASES.get(col)
+        if target:
+            field_to_col[target] = col
+
+    sku_col = field_to_col["sku"]
+    ml_id_col = field_to_col["ml_item_id"]
+    ml_link_col = field_to_col.get("ml_permalink")
+
+    # Recolectar updates
+    updates: list[dict] = []
+    for idx, row in target_df.iterrows():
+        sku = _parse_str(row.get(sku_col))
+        ml_item_id = _parse_str(row.get(ml_id_col))
+        if not sku:
+            continue
+        if not ml_item_id:
+            result.errores.append(f"Fila {idx + 2} (SKU {sku}): ML_Item_ID vacío")
+            continue
+        permalink = _parse_str(row.get(ml_link_col)) if ml_link_col else None
+        updates.append({
+            "sku": sku,
+            "ml_item_id": ml_item_id,
+            "ml_permalink": permalink,
+        })
+
+    if not updates:
+        return result
+
+    # Validar qué SKUs existen
+    skus = [u["sku"] for u in updates]
+    existing_map = dict(
+        db.execute(
+            select(Producto.sku, Producto.id).where(Producto.sku.in_(skus))
+        ).all()
+    )
+
+    # Update SKU por SKU
+    for u in updates:
+        if u["sku"] not in existing_map:
+            result.errores.append(f"SKU '{u['sku']}' no existe en el catálogo")
+            continue
+
+        # Solo update si cambió algo (para reportar correctamente)
+        prod = db.execute(
+            select(Producto).where(Producto.sku == u["sku"])
+        ).scalar_one_or_none()
+        if prod is None:
+            continue
+
+        cambio = False
+        if prod.ml_item_id != u["ml_item_id"]:
+            prod.ml_item_id = u["ml_item_id"]
+            cambio = True
+        if u["ml_permalink"] is not None and prod.ml_permalink != u["ml_permalink"]:
+            prod.ml_permalink = u["ml_permalink"]
+            cambio = True
+
+        if cambio:
+            result.vinculados += 1
+        else:
+            result.sin_cambio += 1
+
+    db.commit()
+    return result
+
+
+def generate_ml_link_template() -> bytes:
+    """Excel template simple para el bulk linkeo — 3 columnas."""
+    output = io.BytesIO()
+    df = pd.DataFrame([
+        {
+            "SKU": "ZE0024",
+            "ML_Item_ID": "MLAU3904630006",
+            "ML_Permalink": "https://articulo.mercadolibre.com.ar/MLA-XXXXXX",
+        },
+        {
+            "SKU": "ZEN1741",
+            "ML_Item_ID": "MLAU1234567890",
+            "ML_Permalink": "",
+        },
+    ])
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="ML_Links", index=False)
+    return output.getvalue()
+
+
+# =============================================================
+# Sync desde ML (read-only)
+# =============================================================
+
+def sync_producto_from_ml(db: Session, sku: str) -> tuple[bool, str]:
+    """
+    Pulla datos frescos del item en ML y los guarda como snapshot
+    (ml_stock, ml_precio, ml_status, ml_permalink, ml_last_synced_at).
+
+    NO modifica stock_actual ni precio_final locales — solo registra
+    "esto es lo que ML reporta hoy" para que se vea drift en el panel.
+
+    Devuelve (ok, mensaje).
+    """
+    from . import ml_client
+
+    if not ml_client.is_configured():
+        return False, "ML no está configurado (faltan env vars ML_*)"
+
+    prod = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return False, f"SKU '{sku}' no existe"
+    if not prod.ml_item_id:
+        return False, "Este SKU no tiene ML_Item_ID vinculado"
+
+    try:
+        item = ml_client.get_item(db, prod.ml_item_id)
+    except ml_client.MLClientError as e:
+        return False, f"Error consultando ML: {e}"
+
+    # Extraer campos
+    prod.ml_status = item.get("status")
+    prod.ml_permalink = item.get("permalink") or prod.ml_permalink
+    aq = item.get("available_quantity")
+    if aq is not None:
+        try:
+            prod.ml_stock = int(aq)
+        except (ValueError, TypeError):
+            pass
+    price = item.get("price")
+    if price is not None:
+        try:
+            prod.ml_precio = Decimal(str(price))
+        except Exception:
+            pass
+    prod.ml_last_synced_at = datetime.now(timezone.utc)
+
+    db.commit()
+
+    # Detectar drift y armar mensaje informativo
+    drift_bits = []
+    if prod.ml_stock is not None and prod.ml_stock != prod.stock_actual:
+        drift_bits.append(f"stock DB={prod.stock_actual} ML={prod.ml_stock}")
+    if (
+        prod.ml_precio is not None
+        and prod.precio_final is not None
+        and prod.ml_precio != prod.precio_final
+    ):
+        drift_bits.append(
+            f"precio DB=${prod.precio_final:,.0f} ML=${prod.ml_precio:,.0f}"
+        )
+
+    msg = f"✓ Sync OK · estado ML: {prod.ml_status or '?'}"
+    if drift_bits:
+        msg += " · ⚠ drift: " + ", ".join(drift_bits)
+
+    return True, msg

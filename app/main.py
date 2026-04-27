@@ -25,11 +25,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session as DbSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, catalogo, database, stock, storage
+from . import auth, catalogo, database, ml_client, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.10.0"
+APP_VERSION = "0.11.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -95,6 +95,7 @@ def status() -> JSONResponse:
         "r2_configured": storage.is_configured(),
         "r2_vars_detected": [k for k in r2_var_names if os.environ.get(k)],
         "r2_vars_missing": [k for k in r2_var_names if not os.environ.get(k)],
+        "ml_configured": ml_client.is_configured(),
     })
 
 
@@ -303,6 +304,7 @@ def catalogo_detail(
             "producto": detail,
             "flash": flash,
             "r2_configured": storage.is_configured(),
+            "ml_configured": ml_client.is_configured(),
         },
     )
 
@@ -377,6 +379,113 @@ def catalogo_foto_delete(
 ):
     """Elimina una foto del producto (de R2 y de la DB)."""
     ok, msg = catalogo.delete_foto(db, foto_id)
+    request.session["flash"] = {
+        "type": "success" if ok else "error",
+        "msg": msg,
+    }
+    return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+
+# ---------------------------------------------------------------
+# Mercado Libre — bulk linkeo + sync individual (read-only)
+# ---------------------------------------------------------------
+
+# IMPORTANTE: estas rutas van ANTES de /catalogo/{sku} en el archivo, pero
+# como FastAPI matchea por exactitud antes que por param, /catalogo/ml-link/upload
+# y /catalogo/ml-link/template no se ven afectadas por /catalogo/{sku}.
+
+@app.post("/catalogo/ml-link/upload")
+async def catalogo_ml_link_upload(
+    request: Request,
+    archivo: UploadFile = File(...),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Bulk linkeo: SKU → ML_Item_ID via Excel."""
+    fname = (archivo.filename or "").lower()
+    if not fname.endswith((".xlsx", ".xls")):
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "El archivo debe ser .xlsx o .xls",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    try:
+        file_bytes = await archivo.read()
+        result = catalogo.process_ml_link_upload(db, file_bytes)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    if result.ok:
+        msg = (
+            f"✓ Linkeo OK — {result.vinculados} vinculaciones nuevas/actualizadas, "
+            f"{result.sin_cambio} sin cambios."
+        )
+        request.session["flash"] = {"type": "success", "msg": msg}
+    else:
+        msg = (
+            f"Linkeo con errores — {result.vinculados} OK, "
+            f"{len(result.errores)} con error: "
+            + " · ".join(result.errores[:5])
+        )
+        if len(result.errores) > 5:
+            msg += f" (+{len(result.errores) - 5} más)"
+        request.session["flash"] = {
+            "type": "warning" if result.vinculados else "error",
+            "msg": msg,
+        }
+
+    return RedirectResponse("/catalogo", status_code=303)
+
+
+@app.get("/catalogo/ml-link/template")
+def catalogo_ml_link_template(user: str = Depends(auth.require_user)):
+    """Excel template para el bulk linkeo (3 columnas: SKU, ML_Item_ID, ML_Permalink)."""
+    excel_bytes = catalogo.generate_ml_link_template()
+    return Response(
+        content=excel_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": 'attachment; filename="primi_motors_ml_link_template.xlsx"'
+        },
+    )
+
+
+@app.post("/catalogo/{sku}/ml-sync")
+def catalogo_ml_sync(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Sync READ-ONLY desde ML para un producto: pulla precio/stock/status."""
+    try:
+        ok, msg = catalogo.sync_producto_from_ml(db, sku)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
     request.session["flash"] = {
         "type": "success" if ok else "error",
         "msg": msg,

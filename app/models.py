@@ -104,6 +104,10 @@ class Producto(Base):
     ml_item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     ml_permalink: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     ml_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Snapshots de lo que ML reportó la última vez que sincronizamos.
+    # Usados para detectar drift (DB local vs ML).
+    ml_stock: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ml_precio: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     ml_last_synced_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -222,6 +226,24 @@ class Vehiculo(Base):
 # =============================================================
 # Compatibilidad producto ↔ vehículo (M:N)
 # =============================================================
+
+class MLToken(Base):
+    """
+    Singleton (id=1) — guarda el refresh_token de Mercado Libre.
+
+    ML rota el refresh_token en cada llamada a /oauth/token. Si lo dejamos solo
+    en env vars, después del primer refresh queda obsoleto y la app pierde acceso.
+    Acá lo persistimos: en cada refresh, sobreescribimos el row con el nuevo
+    refresh_token. La env var ML_REFRESH_TOKEN sirve solo de bootstrap inicial.
+    """
+    __tablename__ = "ml_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    refresh_token: Mapped[str] = mapped_column(String(512), nullable=False)
+    last_refreshed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 
 class ProductoCompatibilidad(Base):
     __tablename__ = "producto_compatibilidades"

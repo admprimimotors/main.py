@@ -149,6 +149,20 @@
   </div>
 </div>
 
+<div class="card" style="margin-bottom: 22px;">
+  <div class="card-title">Vincular SKUs con publicaciones de Mercado Libre</div>
+  <form method="post" action="/catalogo/ml-link/upload" enctype="multipart/form-data" class="upload-form">
+    <input type="file" name="archivo" accept=".xlsx,.xls" required />
+    <button type="submit" class="btn">Subir links ML</button>
+    <a href="/catalogo/ml-link/template" class="btn btn-ghost">Descargar template</a>
+  </form>
+  <div class="help-text">
+    Excel simple con dos columnas — <code>SKU</code> y <code>ML_Item_ID</code> — y opcionalmente <code>ML_Permalink</code>.
+    Solo actualiza los vínculos con ML (no toca stock, precios ni nada más).
+    Útil para cargar de una sola vez los IDs de tus 474 aros u otros lotes que ya estén publicados.
+  </div>
+</div>
+
 <form method="get" action="/catalogo" class="search-form">
   <input type="search" name="q" value="{{ search }}" placeholder="Buscar por SKU, título, marca o categoría…" class="search-input" />
   <button type="submit" class="btn">Buscar</button>

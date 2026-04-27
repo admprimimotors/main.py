@@ -252,8 +252,37 @@
     border: 1px solid rgba(59,130,246,.30);
     font-size: 13px; font-weight: 500;
     transition: background .12s;
+    cursor: pointer;
   }
   .ml-cta:hover { background: rgba(59,130,246,.22); }
+
+  .ml-drift-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; border-radius: 6px;
+    font-size: 13px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+  }
+  .ml-drift-row.diff {
+    background: rgba(245,158,11,.10);
+    border-color: rgba(245,158,11,.30);
+  }
+  .ml-drift-row.match {
+    background: rgba(34,197,94,.08);
+    border-color: rgba(34,197,94,.25);
+  }
+  .ml-drift-label {
+    color: var(--muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    min-width: 70px;
+  }
+  .ml-drift-vals {
+    display: flex; gap: 14px; align-items: baseline;
+    font-variant-numeric: tabular-nums;
+    flex: 1;
+  }
+  .ml-drift-vals .lbl { color: var(--muted); font-size: 11px; }
+  .ml-drift-icon { font-size: 13px; }
 </style>
 
 {% if flash %}
@@ -334,7 +363,7 @@
   <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
     <span>Mercado Libre</span>
     <span style="font-size: 11px; font-weight: normal; color: var(--muted);">
-      ○ Sync automático: pendiente
+      ○ Sync write: pendiente — solo lectura activa
     </span>
   </div>
 
@@ -357,28 +386,71 @@
         {{ producto.ml_last_synced_at.strftime('%d/%m/%Y %H:%M') }}
       </span>
     </div>
+    {% else %}
+    <div class="ml-row">
+      <span class="ml-label">Última sync</span>
+      <span style="color: var(--muted);">Nunca — clickeá "Sync desde ML" para traer los datos</span>
+    </div>
     {% endif %}
-    {% if producto.ml_permalink %}
-    <div style="margin-top: 4px;">
+
+    {# Drift: comparación stock/precio DB vs ML cuando hay datos sincronizados #}
+    {% if producto.ml_stock is not none %}
+      {% set stock_match = (producto.ml_stock == producto.stock_actual) %}
+      <div class="ml-drift-row {{ 'match' if stock_match else 'diff' }}">
+        <span class="ml-drift-label">Stock</span>
+        <div class="ml-drift-vals">
+          <span><span class="lbl">DB:</span> <strong>{{ producto.stock_actual }}</strong></span>
+          <span><span class="lbl">ML:</span> <strong>{{ producto.ml_stock }}</strong></span>
+        </div>
+        <span class="ml-drift-icon">{{ '✓' if stock_match else '⚠' }}</span>
+      </div>
+    {% endif %}
+
+    {% if producto.ml_precio is not none %}
+      {% set precio_match = (producto.precio_final is not none and producto.ml_precio == producto.precio_final) %}
+      <div class="ml-drift-row {{ 'match' if precio_match else 'diff' }}">
+        <span class="ml-drift-label">Precio</span>
+        <div class="ml-drift-vals">
+          <span><span class="lbl">DB:</span>
+            <strong>{% if producto.precio_final is not none %}${{ "{:,.0f}".format(producto.precio_final|float) }}{% else %}—{% endif %}</strong>
+          </span>
+          <span><span class="lbl">ML:</span> <strong>${{ "{:,.0f}".format(producto.ml_precio|float) }}</strong></span>
+        </div>
+        <span class="ml-drift-icon">{{ '✓' if precio_match else '⚠' }}</span>
+      </div>
+    {% endif %}
+
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 4px;">
+      {% if ml_configured %}
+      <form method="post" action="/catalogo/{{ producto.sku|urlencode }}/ml-sync" style="margin: 0;">
+        <button type="submit" class="ml-cta">↻ Sync desde ML</button>
+      </form>
+      {% else %}
+      <span style="font-size: 12px; color: var(--muted);">
+        ○ ML no configurado — faltan env vars <code>ML_*</code>
+      </span>
+      {% endif %}
+      {% if producto.ml_permalink %}
       <a href="{{ producto.ml_permalink }}" target="_blank" rel="noopener noreferrer" class="ml-cta">
         Ver publicación en ML →
       </a>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
   {% else %}
   <div class="empty-block" style="padding: 24px 0;">
     Este SKU <strong>no está vinculado</strong> a una publicación de Mercado Libre.
-    Para vincular, agregá la columna <code>ML_Item_ID</code> al Excel master con el ID
-    de la publicación correspondiente y re-subílo.
+    Vinculá desde <a href="/catalogo" style="color: var(--brand-hover);">/catalogo</a>
+    con el card "Vincular SKUs con publicaciones de Mercado Libre", o agregá la columna
+    <code>ML_Item_ID</code> al Excel master.
   </div>
   {% endif %}
 
   <div class="alert alert-warning" style="margin-top: 16px; margin-bottom: 0;">
-    <strong>Sync pendiente:</strong> los cambios de stock o precio que hagas en este panel
-    <strong>todavía no se replican en Mercado Libre</strong>. La conexión real con la API
-    de ML se activa en una fase próxima — por ahora el panel solo guarda los cambios
-    en nuestra DB local.
+    <strong>Sync de escritura pendiente:</strong> los cambios de stock o precio que hagas en
+    este panel <strong>todavía no se pushean a Mercado Libre</strong>. La conexión read-only
+    sí está activa: con el botón "Sync desde ML" traés los valores actuales de la publicación.
+    El sync write se activa en la próxima fase con un toggle por env var.
   </div>
 </div>
 

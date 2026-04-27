@@ -122,6 +122,12 @@ def _apply_migrations() -> None:
         ADD COLUMN IF NOT EXISTS ml_last_synced_at TIMESTAMP WITH TIME ZONE
         """,
         "CREATE INDEX IF NOT EXISTS ix_productos_ml_item_id ON productos(ml_item_id)",
+        # v7 (2026-04-27): snapshots de lo que ML reporta para detectar drift.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS ml_stock INTEGER,
+        ADD COLUMN IF NOT EXISTS ml_precio NUMERIC(12, 2)
+        """,
     ]
     try:
         with engine.begin() as conn:
