@@ -6,6 +6,7 @@ Servicio del módulo Precios:
   - Aplicación de cambios desde una lista pre-computada
   - Upload de Excel simplificado (SKU + Precio_Costo y/o Precio_Final)
   - Generador de template Excel
+  - Análisis de rentabilidad real en ML (precio ideal + margen neto post-fees)
 
 Las operaciones soportadas:
   - porc_inc / porc_dec  → aumento/descuento porcentual
@@ -17,11 +18,30 @@ Redondeo opcional a múltiplos de 100, 500 o 1000.
 
 A diferencia del Excel master, este flujo solo toca `precio_costo` y/o
 `precio_final` — no afecta título, ficha técnica, stock, ni vínculos ML.
+
+ANÁLISIS DE RENTABILIDAD ML:
+
+ML cobra varias percepciones por venta:
+  - Comisión de venta (~14% según categoría)
+  - Cargo por cuotas con bajo interés (~5%)
+  - Impuestos retenidos (IIBB, IVA sobre comisión, etc — varía por producto)
+  - Costo de envío que asume el vendedor (varía por producto/peso/destino)
+
+Lo que el vendedor recibe REALMENTE:
+  neto = precio_final * (1 - fees_pct/100) - envio_fijo
+
+Margen neto real = (neto - precio_costo) / precio_costo
+
+Si el margen neto está por debajo del objetivo (default 30%), el sistema
+alerta. El precio ideal para alcanzar el objetivo se calcula resolviendo
+para precio_publicado:
+  precio_ideal = (precio_costo * (1 + obj/100) + envio_fijo) / (1 - fees_pct/100)
 """
 
 from __future__ import annotations
 
 import io
+import os
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Optional
@@ -426,3 +446,149 @@ def generate_precios_template() -> bytes:
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="Precios", index=False)
     return output.getvalue()
+
+
+# =============================================================
+# Análisis de rentabilidad ML
+# =============================================================
+
+def _env_decimal(key: str, default: Decimal) -> Decimal:
+    """Lee una env var como Decimal, fallback a default."""
+    val = (os.environ.get(key) or "").strip().replace(",", ".")
+    if not val:
+        return default
+    try:
+        return Decimal(val)
+    except (InvalidOperation, ValueError):
+        return default
+
+
+def get_ml_fees_config() -> dict:
+    """
+    Devuelve la config global de fees ML, con override por env vars.
+    Todas las env vars son opcionales — si no están, usa defaults.
+    """
+    return {
+        "comision_pct": _env_decimal("ML_COMISION_PCT", Decimal("14")),
+        "cuotas_pct":   _env_decimal("ML_CUOTAS_PCT",   Decimal("5")),
+        "impuestos_pct_default": _env_decimal("ML_IMPUESTOS_PCT_DEFAULT", Decimal("3")),
+        "envio_default": _env_decimal("ML_ENVIO_DEFAULT", Decimal("0")),
+        "margen_objetivo_pct": _env_decimal("ML_MARGEN_OBJETIVO_PCT", Decimal("30")),
+    }
+
+
+def _resolver_envio(producto_envio: Optional[Decimal], cfg: dict) -> Decimal:
+    """Envío del producto si está, sino default global."""
+    if producto_envio is not None:
+        return producto_envio
+    return cfg["envio_default"]
+
+
+def _resolver_impuestos(producto_imp: Optional[Decimal], cfg: dict) -> Decimal:
+    """Impuestos del producto si está, sino default global."""
+    if producto_imp is not None:
+        return producto_imp
+    return cfg["impuestos_pct_default"]
+
+
+def _fees_pct_total(impuestos_pct: Decimal, cfg: dict) -> Decimal:
+    """Suma comisión + cuotas + impuestos (en %, ej 14+5+3 = 22)."""
+    return cfg["comision_pct"] + cfg["cuotas_pct"] + impuestos_pct
+
+
+@dataclass
+class RentabilidadML:
+    """Resultado del análisis de rentabilidad de un producto en ML."""
+    # Inputs efectivos usados
+    precio_costo: Optional[Decimal]
+    precio_final: Optional[Decimal]
+    envio_fijo: Decimal
+    impuestos_pct: Decimal
+    comision_pct: Decimal
+    cuotas_pct: Decimal
+    margen_objetivo_pct: Decimal
+    fees_pct_total: Decimal
+
+    # Outputs calculados
+    precio_ideal: Optional[Decimal] = None       # precio que alcanza el margen objetivo
+    neto_recibido: Optional[Decimal] = None      # lo que el vendedor recibe REALMENTE
+    margen_neto_pct: Optional[Decimal] = None    # margen neto real estimado
+    fee_comision: Optional[Decimal] = None       # $ de comisión
+    fee_cuotas: Optional[Decimal] = None         # $ de cuotas
+    fee_impuestos: Optional[Decimal] = None      # $ de impuestos
+    alerta: bool = False                         # True si precio_final < precio_ideal
+
+    @property
+    def computable(self) -> bool:
+        """¿Tenemos los datos mínimos para calcular?"""
+        return self.precio_costo is not None and self.precio_costo > 0
+
+
+def analyze_rentabilidad_ml(
+    *,
+    precio_costo: Optional[Decimal],
+    precio_final: Optional[Decimal],
+    envio_fijo_producto: Optional[Decimal] = None,
+    impuestos_pct_producto: Optional[Decimal] = None,
+) -> RentabilidadML:
+    """
+    Calcula precio ideal + margen neto real para un producto.
+
+    Si falta precio_costo no se puede computar nada — devuelve un objeto con
+    `computable=False`.
+
+    `envio_fijo_producto` y `impuestos_pct_producto` son los overrides por
+    producto. Si están en None, usa los defaults globales.
+    """
+    cfg = get_ml_fees_config()
+    envio = _resolver_envio(envio_fijo_producto, cfg)
+    impuestos_pct = _resolver_impuestos(impuestos_pct_producto, cfg)
+    fees_pct_total = _fees_pct_total(impuestos_pct, cfg)
+
+    result = RentabilidadML(
+        precio_costo=precio_costo,
+        precio_final=precio_final,
+        envio_fijo=envio,
+        impuestos_pct=impuestos_pct,
+        comision_pct=cfg["comision_pct"],
+        cuotas_pct=cfg["cuotas_pct"],
+        margen_objetivo_pct=cfg["margen_objetivo_pct"],
+        fees_pct_total=fees_pct_total,
+    )
+
+    if not result.computable:
+        return result
+
+    # Factor neto: lo que queda después de deducir las % de fees del precio publicado.
+    factor_neto = Decimal("1") - fees_pct_total / Decimal("100")
+    if factor_neto <= 0:
+        # Caso patológico: fees suman más de 100%. No tiene solución.
+        return result
+
+    # Precio ideal: resolver la inecuación neto >= costo * (1 + obj)
+    margen_obj_dec = cfg["margen_objetivo_pct"] / Decimal("100")
+    precio_ideal_raw = (precio_costo * (Decimal("1") + margen_obj_dec) + envio) / factor_neto
+    result.precio_ideal = precio_ideal_raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    # Si hay precio_final cargado, computamos también el margen neto real
+    if precio_final is not None:
+        result.fee_comision = (precio_final * cfg["comision_pct"] / Decimal("100")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        result.fee_cuotas = (precio_final * cfg["cuotas_pct"] / Decimal("100")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        result.fee_impuestos = (precio_final * impuestos_pct / Decimal("100")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        neto = precio_final * factor_neto - envio
+        result.neto_recibido = neto.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if precio_costo > 0:
+            result.margen_neto_pct = (
+                (neto - precio_costo) / precio_costo * Decimal("100")
+            ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+
+        # Alerta si está por debajo del ideal
+        result.alerta = precio_final < result.precio_ideal
+
+    return result

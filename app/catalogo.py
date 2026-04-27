@@ -74,6 +74,13 @@ PRODUCTO_COL_ALIASES: dict[str, str] = {
     "ml_url": "ml_permalink",
     "ml_status": "ml_status",
     "estado_ml": "ml_status",
+    # Costos variables del producto en ML (envío y % impuestos)
+    "ml_envio_fijo": "ml_envio_fijo",
+    "envio_fijo": "ml_envio_fijo",
+    "envio": "ml_envio_fijo",
+    "ml_impuestos_pct": "ml_impuestos_pct",
+    "impuestos_pct": "ml_impuestos_pct",
+    "impuestos": "ml_impuestos_pct",
 }
 
 COMPAT_COL_ALIASES: dict[str, str] = {
@@ -291,6 +298,8 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             "ml_item_id": _parse_str(_g("ml_item_id")),
             "ml_permalink": _parse_str(_g("ml_permalink")),
             "ml_status": _parse_str(_g("ml_status")),
+            "ml_envio_fijo": _parse_decimal(_g("ml_envio_fijo")),
+            "ml_impuestos_pct": _parse_decimal(_g("ml_impuestos_pct")),
         })
 
     if not rows:
@@ -320,6 +329,8 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
         "ml_item_id": "ml_item_id" in field_to_col,
         "ml_permalink": "ml_permalink" in field_to_col,
         "ml_status": "ml_status" in field_to_col,
+        "ml_envio_fijo": "ml_envio_fijo" in field_to_col,
+        "ml_impuestos_pct": "ml_impuestos_pct" in field_to_col,
     }
 
     # UPSERT por chunks (Postgres limita a ~32K parámetros por statement)
@@ -756,6 +767,8 @@ def get_producto_detail(db: Session, sku: str) -> Optional[dict]:
         "ml_stock": prod.ml_stock,
         "ml_precio": prod.ml_precio,
         "ml_last_synced_at": prod.ml_last_synced_at,
+        "ml_envio_fijo": prod.ml_envio_fijo,
+        "ml_impuestos_pct": prod.ml_impuestos_pct,
         "created_at": prod.created_at,
         "updated_at": prod.updated_at,
         "compatibilidades": compats,
@@ -1167,6 +1180,10 @@ def update_producto_basic(
     precio_final: Optional[Decimal] = None,
     moneda: Optional[str] = None,
     activo: Optional[bool] = None,
+    ml_envio_fijo: Optional[Decimal] = None,
+    ml_impuestos_pct: Optional[Decimal] = None,
+    update_envio: bool = False,
+    update_impuestos: bool = False,
 ) -> tuple[bool, str, dict]:
     """
     Actualiza los campos básicos de un producto desde el form de edición.
@@ -1207,6 +1224,12 @@ def update_producto_basic(
         _set("moneda", (moneda.strip().upper() or "ARS")[:3])
     if activo is not None:
         _set("activo", bool(activo))
+    # Para envío y impuestos usamos un flag explícito porque el "valor None"
+    # significa "limpiar" (volver al default global), no "no tocar".
+    if update_envio:
+        _set("ml_envio_fijo", ml_envio_fijo)
+    if update_impuestos:
+        _set("ml_impuestos_pct", ml_impuestos_pct)
 
     if not cambios:
         return True, "Sin cambios", {}

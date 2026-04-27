@@ -111,6 +111,10 @@ class Producto(Base):
     ml_last_synced_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Costos variables por producto que afectan la rentabilidad real en ML.
+    # Si están en NULL, se usa el default global del módulo Precios.
+    ml_envio_fijo: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    ml_impuestos_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
 
     # Auditoría
     created_at: Mapped[datetime] = mapped_column(

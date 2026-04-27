@@ -162,6 +162,22 @@
     </label>
   </div>
 
+  <div class="form-grid" style="border-top: 1px solid var(--border-soft); padding-top: 18px;">
+    <div class="form-row">
+      <label for="ml_envio_fijo">Envío fijo ML ($)</label>
+      <input id="ml_envio_fijo" name="ml_envio_fijo" type="number" step="0.01" min="0"
+             value="{{ producto.ml_envio_fijo if producto.ml_envio_fijo is not none else '' }}" />
+      <span class="helper">Costo de envío que ML descuenta de tu venta. Vacío = usa el default global.</span>
+    </div>
+
+    <div class="form-row">
+      <label for="ml_impuestos_pct">Impuestos % ML</label>
+      <input id="ml_impuestos_pct" name="ml_impuestos_pct" type="number" step="0.01" min="0" max="100"
+             value="{{ producto.ml_impuestos_pct if producto.ml_impuestos_pct is not none else '' }}" />
+      <span class="helper">% de impuestos retenidos (IIBB local + lo que aplique). Vacío = default global.</span>
+    </div>
+  </div>
+
   <div class="form-actions">
     <a href="/catalogo/{{ producto.sku|urlencode }}" class="btn btn-ghost">Cancelar</a>
     <button type="submit" class="btn">Guardar cambios</button>

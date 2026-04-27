@@ -128,6 +128,12 @@ def _apply_migrations() -> None:
         ADD COLUMN IF NOT EXISTS ml_stock INTEGER,
         ADD COLUMN IF NOT EXISTS ml_precio NUMERIC(12, 2)
         """,
+        # v8 (2026-04-27): costos variables por producto para análisis de rentabilidad ML.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS ml_envio_fijo NUMERIC(12, 2),
+        ADD COLUMN IF NOT EXISTS ml_impuestos_pct NUMERIC(5, 2)
+        """,
     ]
     try:
         with engine.begin() as conn:

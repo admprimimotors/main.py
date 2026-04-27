@@ -256,6 +256,51 @@
   }
   .ml-cta:hover { background: rgba(59,130,246,.22); }
 
+  .renta-grid {
+    display: grid; gap: 18px;
+    grid-template-columns: 1fr 1fr;
+  }
+  @media (max-width: 700px) { .renta-grid { grid-template-columns: 1fr; } }
+  .renta-block { display: flex; flex-direction: column; gap: 8px; }
+  .renta-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; padding: 4px 0;
+  }
+  .renta-row.head {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.4px;
+    border-bottom: 1px solid var(--border-soft);
+    padding-bottom: 6px; margin-bottom: 4px;
+  }
+  .renta-row .label { color: var(--muted); }
+  .renta-row .value { font-variant-numeric: tabular-nums; color: var(--text); }
+  .renta-row.total {
+    font-weight: 600; border-top: 1px solid var(--border-soft);
+    padding-top: 8px; margin-top: 4px;
+  }
+  .renta-alert {
+    padding: 14px 16px; border-radius: 8px;
+    font-size: 13px; line-height: 1.6;
+    margin-top: 14px;
+    border: 1px solid;
+  }
+  .renta-alert.bad {
+    background: rgba(239,68,68,.10);
+    border-color: rgba(239,68,68,.40);
+    color: #fca5a5;
+  }
+  .renta-alert.good {
+    background: rgba(34,197,94,.10);
+    border-color: rgba(34,197,94,.40);
+    color: #86efac;
+  }
+  .renta-alert.muted {
+    background: var(--panel-2);
+    border-color: var(--border-soft);
+    color: var(--muted);
+  }
+  .renta-alert strong { color: inherit; }
+
   .ml-drift-row {
     display: flex; align-items: center; gap: 12px;
     padding: 10px 12px; border-radius: 6px;
@@ -361,6 +406,125 @@
     {% endif %}
   </div>
 </div>
+
+{# ============================================== #}
+{# Análisis de rentabilidad en Mercado Libre      #}
+{# ============================================== #}
+{% if rentabilidad %}
+<div class="card" style="margin-bottom: 18px;">
+  <div class="card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+    <span>Análisis de rentabilidad ML</span>
+    <span style="font-size: 11px; font-weight: normal; color: var(--muted);">
+      Objetivo: {{ "{:.0f}".format(rentabilidad.margen_objetivo_pct|float) }}% neto
+    </span>
+  </div>
+
+  {% if not rentabilidad.computable %}
+    <div class="renta-alert muted">
+      Para calcular precio ideal y margen neto, cargá <strong>precio_costo</strong>
+      en este producto (desde el form de editar o vía Excel master).
+    </div>
+  {% else %}
+    <div class="renta-grid">
+      {# ---- Bloque izquierdo: Precio ideal vs actual ---- #}
+      <div class="renta-block">
+        <div class="renta-row head"><span>Precio publicado</span><span></span></div>
+        <div class="renta-row">
+          <span class="label">Ideal (para {{ "{:.0f}".format(rentabilidad.margen_objetivo_pct|float) }}% neto)</span>
+          <span class="value"><strong>${{ "{:,.0f}".format(rentabilidad.precio_ideal|float) }}</strong></span>
+        </div>
+        <div class="renta-row">
+          <span class="label">Actual</span>
+          <span class="value">
+            {% if producto.precio_final is not none %}
+              ${{ "{:,.0f}".format(producto.precio_final|float) }}
+            {% else %}—{% endif %}
+          </span>
+        </div>
+        {% if producto.precio_final is not none %}
+        <div class="renta-row">
+          <span class="label">Diferencia vs ideal</span>
+          {% set dif = (producto.precio_final - rentabilidad.precio_ideal)|float %}
+          <span class="value" style="color: {{ '#86efac' if dif >= 0 else '#fca5a5' }};">
+            {{ '+' if dif >= 0 else '' }}${{ "{:,.0f}".format(dif) }}
+          </span>
+        </div>
+        {% endif %}
+      </div>
+
+      {# ---- Bloque derecho: Breakdown de fees y neto ---- #}
+      <div class="renta-block">
+        <div class="renta-row head"><span>Detalle de fees ML</span><span></span></div>
+        <div class="renta-row">
+          <span class="label">Comisión ({{ "{:.1f}".format(rentabilidad.comision_pct|float) }}%)</span>
+          <span class="value">{% if rentabilidad.fee_comision is not none %}−${{ "{:,.0f}".format(rentabilidad.fee_comision|float) }}{% else %}—{% endif %}</span>
+        </div>
+        <div class="renta-row">
+          <span class="label">Cuotas ({{ "{:.1f}".format(rentabilidad.cuotas_pct|float) }}%)</span>
+          <span class="value">{% if rentabilidad.fee_cuotas is not none %}−${{ "{:,.0f}".format(rentabilidad.fee_cuotas|float) }}{% else %}—{% endif %}</span>
+        </div>
+        <div class="renta-row">
+          <span class="label">Impuestos ({{ "{:.1f}".format(rentabilidad.impuestos_pct|float) }}%)</span>
+          <span class="value">{% if rentabilidad.fee_impuestos is not none %}−${{ "{:,.0f}".format(rentabilidad.fee_impuestos|float) }}{% else %}—{% endif %}</span>
+        </div>
+        <div class="renta-row">
+          <span class="label">Envío fijo</span>
+          <span class="value">−${{ "{:,.0f}".format(rentabilidad.envio_fijo|float) }}</span>
+        </div>
+        <div class="renta-row total">
+          <span>Neto recibido</span>
+          <span class="value">{% if rentabilidad.neto_recibido is not none %}${{ "{:,.0f}".format(rentabilidad.neto_recibido|float) }}{% else %}—{% endif %}</span>
+        </div>
+        <div class="renta-row">
+          <span class="label">Margen neto real</span>
+          <span class="value">
+            {% if rentabilidad.margen_neto_pct is not none %}
+              {% set m = rentabilidad.margen_neto_pct|float %}
+              <strong style="color: {% if m < rentabilidad.margen_objetivo_pct|float %}#fca5a5{% else %}#86efac{% endif %};">
+                {{ "{:.1f}".format(m) }}%
+              </strong>
+            {% else %}—{% endif %}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    {# Alerta si el precio actual está por debajo del ideal #}
+    {% if rentabilidad.alerta and producto.precio_final is not none %}
+    <div class="renta-alert bad">
+      <strong>⚠ Precio publicado por debajo del ideal.</strong>
+      Estás cobrando ${{ "{:,.0f}".format(producto.precio_final|float) }} y para
+      llegar al {{ "{:.0f}".format(rentabilidad.margen_objetivo_pct|float) }}% neto
+      objetivo necesitarías ${{ "{:,.0f}".format(rentabilidad.precio_ideal|float) }}.
+      Tu margen neto real estimado es
+      <strong>{{ "{:.1f}".format(rentabilidad.margen_neto_pct|float) }}%</strong>
+      después de fees ML.
+    </div>
+    {% elif producto.precio_final is not none and not rentabilidad.alerta %}
+    <div class="renta-alert good">
+      <strong>✓ Precio por encima del ideal.</strong>
+      Margen neto real: {{ "{:.1f}".format(rentabilidad.margen_neto_pct|float) }}%
+      (objetivo: {{ "{:.0f}".format(rentabilidad.margen_objetivo_pct|float) }}%).
+    </div>
+    {% else %}
+    <div class="renta-alert muted">
+      Cargá <strong>precio_final</strong> para ver el análisis de fees y margen neto real.
+      El precio ideal calculado ya se muestra arriba.
+    </div>
+    {% endif %}
+
+    <div style="font-size: 11px; color: var(--muted); margin-top: 12px; line-height: 1.6;">
+      Inputs usados —
+      Costo: ${{ "{:,.0f}".format(rentabilidad.precio_costo|float) }} ·
+      Envío: ${{ "{:,.0f}".format(rentabilidad.envio_fijo|float) }}
+      {% if producto.ml_envio_fijo is none %}<em>(default global)</em>{% else %}<em>(producto)</em>{% endif %} ·
+      Impuestos: {{ "{:.1f}".format(rentabilidad.impuestos_pct|float) }}%
+      {% if producto.ml_impuestos_pct is none %}<em>(default global)</em>{% else %}<em>(producto)</em>{% endif %}.
+      Editá envío y/o impuestos desde ✎ Editar.
+    </div>
+  {% endif %}
+</div>
+{% endif %}
 
 <div class="card" style="margin-bottom: 18px;">
   <div class="card-title">Ajuste rápido de stock</div>

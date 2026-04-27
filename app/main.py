@@ -30,7 +30,7 @@ from . import auth, catalogo, database, ml_client, precios, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.15.0"
+APP_VERSION = "0.16.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -313,6 +313,12 @@ def catalogo_detail(
         }
         return RedirectResponse("/catalogo", status_code=303)
     flash = request.session.pop("flash", None)
+    rentabilidad = precios.analyze_rentabilidad_ml(
+        precio_costo=detail["precio_costo"],
+        precio_final=detail["precio_final"],
+        envio_fijo_producto=detail.get("ml_envio_fijo"),
+        impuestos_pct_producto=detail.get("ml_impuestos_pct"),
+    )
     return templates.TemplateResponse(
         request,
         "producto.html",
@@ -325,6 +331,7 @@ def catalogo_detail(
             "r2_configured": storage.is_configured(),
             "ml_configured": ml_client.is_configured(),
             "ml_write_enabled": ml_client.is_write_enabled(),
+            "rentabilidad": rentabilidad,
         },
     )
 
@@ -936,6 +943,8 @@ def catalogo_editar_save(
     precio_final: str = Form(default=""),
     moneda: str = Form(default="ARS"),
     activo: str = Form(default=""),
+    ml_envio_fijo: str = Form(default=""),
+    ml_impuestos_pct: str = Form(default=""),
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
@@ -965,6 +974,10 @@ def catalogo_editar_save(
             precio_final=_to_dec(precio_final),
             moneda=moneda,
             activo=activo_bool,
+            ml_envio_fijo=_to_dec(ml_envio_fijo),
+            ml_impuestos_pct=_to_dec(ml_impuestos_pct),
+            update_envio=True,
+            update_impuestos=True,
         )
     except Exception as e:
         import traceback
