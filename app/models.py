@@ -97,6 +97,17 @@ class Producto(Base):
     # Soft delete: en vez de borrar, marcamos activo=false.
     activo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
 
+    # ----- Vínculo con Mercado Libre -----
+    # Estos campos se cargan a través del Excel master (columnas ML_Item_ID,
+    # ML_Permalink, ML_Status). El sync real con la API de ML se activa en una
+    # fase posterior — por ahora son solo metadata para mostrar en el panel.
+    ml_item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    ml_permalink: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    ml_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    ml_last_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Auditoría
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

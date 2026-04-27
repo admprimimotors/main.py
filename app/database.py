@@ -96,11 +96,48 @@ def ping() -> bool:
         return False
 
 
+def _apply_migrations() -> None:
+    """
+    Migraciones manuales (ALTER TABLE) hasta que pasemos a Alembic.
+
+    `create_all()` es idempotente para tablas pero NO agrega columnas a tablas
+    existentes. Este helper corre statements `IF NOT EXISTS` antes del create_all,
+    así si el schema evoluciona (nuevas columnas en tablas con datos), las cargamos
+    sin perder data.
+
+    Cada bloque debería ser idempotente (ADD COLUMN IF NOT EXISTS, etc).
+    """
+    if engine is None:
+        return
+
+    statements = [
+        # v6 (2026-04-27): vínculo con Mercado Libre en `productos`.
+        # Por ahora son solo metadata (ID, permalink, estado) — el sync real
+        # con la API se activa en una fase posterior.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS ml_item_id VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS ml_permalink VARCHAR(512),
+        ADD COLUMN IF NOT EXISTS ml_status VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS ml_last_synced_at TIMESTAMP WITH TIME ZONE
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_productos_ml_item_id ON productos(ml_item_id)",
+    ]
+    try:
+        with engine.begin() as conn:
+            for stmt_sql in statements:
+                conn.execute(text(stmt_sql))
+    except Exception as e:
+        # No tiramos abajo el arranque por una migración fallida —
+        # logueamos y seguimos (la app puede correr con schema viejo).
+        print(f"[migrations] error: {type(e).__name__}: {e}")
+
+
 def init_db() -> None:
     """
-    Crea todas las tablas registradas en `Base.metadata`.
-    Lo llamamos al arrancar la app — idempotente, no rompe si ya existen.
-    Cuando el schema se complique, migramos a Alembic.
+    Aplica migraciones manuales y crea tablas que aún no existan.
+    Lo llamamos al arrancar la app — idempotente.
+    Cuando el schema se complique más, migramos a Alembic.
     """
     if engine is None:
         return
@@ -108,6 +145,7 @@ def init_db() -> None:
     # El import tiene side-effect: las clases que extienden Base se registran
     # en Base.metadata al ser definidas.
     from . import models  # noqa: F401
+    _apply_migrations()
     Base.metadata.create_all(bind=engine)
 
 

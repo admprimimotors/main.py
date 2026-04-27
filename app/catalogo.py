@@ -62,6 +62,16 @@ PRODUCTO_COL_ALIASES: dict[str, str] = {
     "stock_actual": "stock_actual",
     "activo": "activo",
     "active": "activo",
+    # Vínculo con Mercado Libre (read-only por ahora, no sincroniza)
+    "ml_item_id": "ml_item_id",
+    "ml_id": "ml_item_id",
+    "mlid": "ml_item_id",
+    "item_id": "ml_item_id",
+    "ml_permalink": "ml_permalink",
+    "permalink": "ml_permalink",
+    "ml_url": "ml_permalink",
+    "ml_status": "ml_status",
+    "estado_ml": "ml_status",
 }
 
 COMPAT_COL_ALIASES: dict[str, str] = {
@@ -276,6 +286,9 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             "moneda": _parse_str(_g("moneda")) or "ARS",
             "stock_actual": _parse_int(_g("stock_actual")) or 0,
             "activo": _parse_bool(_g("activo")),
+            "ml_item_id": _parse_str(_g("ml_item_id")),
+            "ml_permalink": _parse_str(_g("ml_permalink")),
+            "ml_status": _parse_str(_g("ml_status")),
         })
 
     if not rows:
@@ -287,26 +300,38 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
         s for (s,) in db.execute(select(Producto.sku).where(Producto.sku.in_(skus))).all()
     )
 
+    # ON CONFLICT: solo actualizamos las columnas que vinieron en el Excel.
+    # Si una columna NO está en el Excel, su valor existente en la DB se preserva.
+    # Esto evita que un upload "parcial" pise datos (ej: subir solo Stock no
+    # borra el ML_Item_ID existente).
+    column_present = {
+        "titulo": "titulo" in field_to_col,
+        "descripcion": "descripcion" in field_to_col,
+        "categoria": "categoria" in field_to_col,
+        "marca": "marca" in field_to_col,
+        "ficha_tecnica": len(extra_cols) > 0,
+        "precio_costo": "precio_costo" in field_to_col,
+        "precio_final": "precio_final" in field_to_col,
+        "moneda": "moneda" in field_to_col,
+        "stock_actual": "stock_actual" in field_to_col,
+        "activo": "activo" in field_to_col,
+        "ml_item_id": "ml_item_id" in field_to_col,
+        "ml_permalink": "ml_permalink" in field_to_col,
+        "ml_status": "ml_status" in field_to_col,
+    }
+
     # UPSERT por chunks (Postgres limita a ~32K parámetros por statement)
     CHUNK = 500
     for i in range(0, len(rows), CHUNK):
         chunk = rows[i: i + CHUNK]
         stmt = pg_insert(Producto).values(chunk)
+        set_clauses = {"updated_at": sql_func.now()}
+        for col, present in column_present.items():
+            if present:
+                set_clauses[col] = getattr(stmt.excluded, col)
         stmt = stmt.on_conflict_do_update(
             index_elements=["sku"],
-            set_={
-                "titulo": stmt.excluded.titulo,
-                "descripcion": stmt.excluded.descripcion,
-                "categoria": stmt.excluded.categoria,
-                "marca": stmt.excluded.marca,
-                "ficha_tecnica": stmt.excluded.ficha_tecnica,
-                "precio_costo": stmt.excluded.precio_costo,
-                "precio_final": stmt.excluded.precio_final,
-                "moneda": stmt.excluded.moneda,
-                "stock_actual": stmt.excluded.stock_actual,
-                "activo": stmt.excluded.activo,
-                "updated_at": sql_func.now(),
-            },
+            set_=set_clauses,
         )
         db.execute(stmt)
 
@@ -569,6 +594,8 @@ def list_productos(
             "stock_actual": prod.stock_actual,
             "activo": prod.activo,
             "compat_count": int(compat_count or 0),
+            "ml_item_id": prod.ml_item_id,
+            "ml_permalink": prod.ml_permalink,
         })
     return productos, total
 
@@ -633,6 +660,10 @@ def get_producto_detail(db: Session, sku: str) -> Optional[dict]:
         "moneda": prod.moneda,
         "stock_actual": prod.stock_actual,
         "activo": prod.activo,
+        "ml_item_id": prod.ml_item_id,
+        "ml_permalink": prod.ml_permalink,
+        "ml_status": prod.ml_status,
+        "ml_last_synced_at": prod.ml_last_synced_at,
         "created_at": prod.created_at,
         "updated_at": prod.updated_at,
         "compatibilidades": compats,
@@ -660,6 +691,9 @@ def generate_template() -> bytes:
             "Moneda": "ARS",
             "Stock": 12,
             "Activo": "SI",
+            "ML_Item_ID": "MLAU3904630006",
+            "ML_Permalink": "https://articulo.mercadolibre.com.ar/MLA-XXXXXX",
+            "ML_Status": "active",
             "Diametro_mm": 75.0,
             "Espesor_mm": 1.5,
             "Material": "acero",
@@ -675,6 +709,9 @@ def generate_template() -> bytes:
             "Moneda": "ARS",
             "Stock": 4,
             "Activo": "SI",
+            "ML_Item_ID": "",
+            "ML_Permalink": "",
+            "ML_Status": "",
             "Voltaje": 12,
             "Potencia_kW": 1.4,
             "Dientes": 9,

@@ -93,6 +93,22 @@
     padding: 3px 10px; border-radius: 999px; font-size: 11px;
     text-transform: uppercase; letter-spacing: 0.4px;
   }
+  .ml-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 999px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    background: rgba(59,130,246,.14); color: #93c5fd;
+    border: 1px solid rgba(59,130,246,.30);
+    transition: background .12s;
+  }
+  .ml-chip:hover { background: rgba(59,130,246,.24); }
+  .ml-chip-empty {
+    display: inline-flex; align-items: center;
+    padding: 3px 10px; border-radius: 999px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    background: var(--panel-2); color: var(--muted);
+    border: 1px dashed var(--border);
+  }
 
   .pagination {
     display: flex; align-items: center; justify-content: center;
@@ -151,6 +167,7 @@
         <th class="num">Precio</th>
         <th class="num">Stock</th>
         <th class="num">Compat.</th>
+        <th>ML</th>
         <th>Estado</th>
       </tr>
     </thead>
@@ -169,10 +186,25 @@
         <td class="num">{{ p.stock_actual }}</td>
         <td class="num">{{ p.compat_count }}</td>
         <td>
-          {% if p.activo %}
-            <span class="badge-success">Activo</span>
+          {% if p.ml_item_id %}
+            {% if p.ml_permalink %}
+              <a href="{{ p.ml_permalink }}" target="_blank" rel="noopener noreferrer"
+                 class="ml-chip" title="Ver en Mercado Libre"
+                 onclick="event.stopPropagation();">
+                ↗ Vinculado
+              </a>
+            {% else %}
+              <span class="ml-chip" title="{{ p.ml_item_id }}">↗ Vinculado</span>
+            {% endif %}
           {% else %}
-            <span class="badge-muted">Pausado</span>
+            <span class="ml-chip-empty">Sin vincular</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if p.activo %}
+            <span class="badge-success">En catálogo</span>
+          {% else %}
+            <span class="badge-muted">Archivado</span>
           {% endif %}
         </td>
       </tr>
