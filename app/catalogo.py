@@ -835,6 +835,7 @@ def delete_foto(db: Session, foto_id: int) -> tuple[bool, str]:
 class MLLinkUploadResult:
     vinculados: int = 0
     sin_cambio: int = 0
+    creados_placeholder: int = 0
     errores: list[str] = field(default_factory=list)
 
     @property
@@ -857,10 +858,23 @@ _ML_LINK_ALIASES = {
 }
 
 
-def process_ml_link_upload(db: Session, file_bytes: bytes) -> MLLinkUploadResult:
+def process_ml_link_upload(
+    db: Session,
+    file_bytes: bytes,
+    crear_faltantes: bool = True,
+) -> MLLinkUploadResult:
     """
     Procesa un Excel simple con SKU + ML_Item_ID (+ ML_Permalink opcional).
     Solo actualiza esos campos — no toca stock, precios, ficha, ni nada más.
+
+    Si `crear_faltantes=True` (default), los SKUs que NO existen en el catálogo
+    se crean como "placeholder": un Producto con titulo=SKU, stock=0, sin precios,
+    pero CON el ml_item_id y ml_permalink seteados. Después el usuario completa
+    los campos vacíos subiendo el Excel master normal — el upsert respeta los
+    campos ya cargados (incluido el ML link).
+
+    Si `crear_faltantes=False`, los SKUs faltantes se reportan como error y no
+    se hace nada con ellos (modo estricto: validación contra el catálogo).
     """
     result = MLLinkUploadResult()
 
@@ -929,13 +943,30 @@ def process_ml_link_upload(db: Session, file_bytes: bytes) -> MLLinkUploadResult
         ).all()
     )
 
-    # Update SKU por SKU
+    # Update / create SKU por SKU
     for u in updates:
         if u["sku"] not in existing_map:
-            result.errores.append(f"SKU '{u['sku']}' no existe en el catálogo")
+            if crear_faltantes:
+                # Crear placeholder con datos mínimos. Lo demás (título real,
+                # precios, stock, descripción, ficha técnica, compatibilidades)
+                # se completa después al subir el Excel master normal.
+                placeholder = Producto(
+                    sku=u["sku"],
+                    titulo=u["sku"],     # placeholder: titulo == sku, fácil de identificar
+                    ficha_tecnica={},
+                    moneda="ARS",
+                    stock_actual=0,
+                    activo=True,
+                    ml_item_id=u["ml_item_id"],
+                    ml_permalink=u["ml_permalink"],
+                )
+                db.add(placeholder)
+                result.creados_placeholder += 1
+            else:
+                result.errores.append(f"SKU '{u['sku']}' no existe en el catálogo")
             continue
 
-        # Solo update si cambió algo (para reportar correctamente)
+        # SKU existe — actualizar solo si hay cambios
         prod = db.execute(
             select(Producto).where(Producto.sku == u["sku"])
         ).scalar_one_or_none()

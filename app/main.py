@@ -398,10 +398,15 @@ def catalogo_foto_delete(
 async def catalogo_ml_link_upload(
     request: Request,
     archivo: UploadFile = File(...),
+    crear_faltantes: str = Form(default=""),
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
-    """Bulk linkeo: SKU → ML_Item_ID via Excel."""
+    """
+    Bulk linkeo: SKU → ML_Item_ID via Excel.
+    `crear_faltantes` viene como string del checkbox (HTML manda "on" si está
+    tildado, vacío si no). Convertimos a bool.
+    """
     fname = (archivo.filename or "").lower()
     if not fname.endswith((".xlsx", ".xls")):
         request.session["flash"] = {
@@ -410,9 +415,13 @@ async def catalogo_ml_link_upload(
         }
         return RedirectResponse("/catalogo", status_code=303)
 
+    crear_flag = crear_faltantes.strip().lower() in ("on", "true", "1", "yes")
+
     try:
         file_bytes = await archivo.read()
-        result = catalogo.process_ml_link_upload(db, file_bytes)
+        result = catalogo.process_ml_link_upload(
+            db, file_bytes, crear_faltantes=crear_flag
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -426,22 +435,31 @@ async def catalogo_ml_link_upload(
         }
         return RedirectResponse("/catalogo", status_code=303)
 
+    # Armar mensaje con todos los conteos
+    parts = []
+    if result.vinculados:
+        parts.append(f"{result.vinculados} vinculaciones")
+    if result.creados_placeholder:
+        parts.append(f"{result.creados_placeholder} placeholders creados")
+    if result.sin_cambio:
+        parts.append(f"{result.sin_cambio} sin cambios")
+    summary = " · ".join(parts) if parts else "ningún cambio"
+
     if result.ok:
-        msg = (
-            f"✓ Linkeo OK — {result.vinculados} vinculaciones nuevas/actualizadas, "
-            f"{result.sin_cambio} sin cambios."
-        )
-        request.session["flash"] = {"type": "success", "msg": msg}
+        request.session["flash"] = {
+            "type": "success",
+            "msg": f"✓ Linkeo OK — {summary}.",
+        }
     else:
         msg = (
-            f"Linkeo con errores — {result.vinculados} OK, "
-            f"{len(result.errores)} con error: "
+            f"Linkeo con errores — {summary}. "
+            f"{len(result.errores)} errores: "
             + " · ".join(result.errores[:5])
         )
         if len(result.errores) > 5:
             msg += f" (+{len(result.errores) - 5} más)"
         request.session["flash"] = {
-            "type": "warning" if result.vinculados else "error",
+            "type": "warning" if (result.vinculados or result.creados_placeholder) else "error",
             "msg": msg,
         }
 
