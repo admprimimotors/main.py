@@ -74,6 +74,13 @@ def health() -> JSONResponse:
 @app.get("/status")
 def status() -> JSONResponse:
     """Info rápida del entorno (útil para debug de deploys)."""
+    r2_var_names = (
+        "R2_ACCOUNT_ID",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "R2_BUCKET",
+        "R2_PUBLIC_URL",
+    )
     return JSONResponse({
         "service": APP_NAME,
         "version": APP_VERSION,
@@ -85,6 +92,9 @@ def status() -> JSONResponse:
         "db_configured": bool(os.environ.get("DATABASE_URL")),
         "db_connected": database.ping(),
         "db_tables": database.count_tables(),
+        "r2_configured": storage.is_configured(),
+        "r2_vars_detected": [k for k in r2_var_names if os.environ.get(k)],
+        "r2_vars_missing": [k for k in r2_var_names if not os.environ.get(k)],
     })
 
 
