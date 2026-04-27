@@ -398,14 +398,12 @@ def catalogo_foto_delete(
 async def catalogo_ml_link_upload(
     request: Request,
     archivo: UploadFile = File(...),
-    crear_faltantes: str = Form(default=""),
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
     """
     Bulk linkeo: SKU → ML_Item_ID via Excel.
-    `crear_faltantes` viene como string del checkbox (HTML manda "on" si está
-    tildado, vacío si no). Convertimos a bool.
+    Por default crea placeholders para SKUs que aún no están en el catálogo.
     """
     fname = (archivo.filename or "").lower()
     if not fname.endswith((".xlsx", ".xls")):
@@ -415,12 +413,10 @@ async def catalogo_ml_link_upload(
         }
         return RedirectResponse("/catalogo", status_code=303)
 
-    crear_flag = crear_faltantes.strip().lower() in ("on", "true", "1", "yes")
-
     try:
         file_bytes = await archivo.read()
         result = catalogo.process_ml_link_upload(
-            db, file_bytes, crear_faltantes=crear_flag
+            db, file_bytes, crear_faltantes=True
         )
     except Exception as e:
         import traceback

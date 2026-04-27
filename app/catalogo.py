@@ -935,6 +935,14 @@ def process_ml_link_upload(
     if not updates:
         return result
 
+    # Deduplicar por SKU (si el Excel tiene repeticiones, mantener la última).
+    # Sin esto, dos rows con el mismo SKU intentarían un INSERT duplicado y
+    # toda la transacción rollbearía por violación de unique constraint.
+    seen_skus: dict[str, dict] = {}
+    for u in updates:
+        seen_skus[u["sku"]] = u
+    updates = list(seen_skus.values())
+
     # Validar qué SKUs existen
     skus = [u["sku"] for u in updates]
     existing_map = dict(
