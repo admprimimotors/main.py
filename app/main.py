@@ -29,7 +29,7 @@ from . import auth, catalogo, database, ml_client, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.12.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -96,6 +96,7 @@ def status() -> JSONResponse:
         "r2_vars_detected": [k for k in r2_var_names if os.environ.get(k)],
         "r2_vars_missing": [k for k in r2_var_names if not os.environ.get(k)],
         "ml_configured": ml_client.is_configured(),
+        "ml_write_enabled": ml_client.is_write_enabled(),
     })
 
 
@@ -305,6 +306,7 @@ def catalogo_detail(
             "flash": flash,
             "r2_configured": storage.is_configured(),
             "ml_configured": ml_client.is_configured(),
+            "ml_write_enabled": ml_client.is_write_enabled(),
         },
     )
 
@@ -663,8 +665,61 @@ def catalogo_stock_update(
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
-    """Ajuste rápido de stock desde la vista detalle (set absoluto, +1 o -1)."""
+    """
+    Ajuste rápido de stock desde la vista detalle (set absoluto, +1 o -1).
+
+    Si ML_SYNC_WRITE_ENABLED está activo y el producto está vinculado a ML,
+    además del update local intenta pushear el stock nuevo a la publicación.
+    El éxito/fracaso del push se concatena al flash. El cambio local NO se
+    revierte si el push falla (intencional — preservamos la intención del usuario).
+    """
     ok, msg = stock.update_stock(db, sku, stock_value)
+
+    # Auto-push a ML si está habilitado y el local update fue OK
+    if ok and ml_client.is_write_enabled():
+        try:
+            push_ok, push_msg = catalogo.push_to_ml(
+                db, sku, push_stock=True, push_price=False
+            )
+        except Exception as e:
+            push_ok = False
+            push_msg = f"ML push falló: {type(e).__name__}: {e}"
+        msg = f"{msg} · {push_msg}"
+        # Si el local OK pero el push falló, mensaje queda warning (no error puro)
+        flash_type = "success" if push_ok else "warning"
+    else:
+        flash_type = "success" if ok else "error"
+
+    request.session["flash"] = {"type": flash_type, "msg": msg}
+    return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+
+@app.post("/catalogo/{sku}/ml-push")
+def catalogo_ml_push(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Push manual del producto entero (stock + precio del DB local) a la publicación
+    de ML. Útil después de updates bulk donde no auto-pusheamos.
+    """
+    try:
+        ok, msg = catalogo.push_to_ml(db, sku, push_stock=True, push_price=True)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
     request.session["flash"] = {
         "type": "success" if ok else "error",
         "msg": msg,

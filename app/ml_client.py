@@ -69,6 +69,21 @@ def is_configured() -> bool:
     )
 
 
+def is_write_enabled() -> bool:
+    """
+    ¿Está habilitado el sync de escritura a ML?
+    Por default NO — se activa explícitamente con la env var
+    ML_SYNC_WRITE_ENABLED=true en Render.
+
+    Mientras esté en false, ningún PUT sale a ML aunque el código exista.
+    """
+    return (
+        is_configured()
+        and (os.environ.get("ML_SYNC_WRITE_ENABLED") or "").strip().lower()
+        in ("true", "1", "yes", "on")
+    )
+
+
 # =============================================================
 # Manejo del refresh_token (DB con fallback a env)
 # =============================================================
@@ -221,3 +236,64 @@ def get_item(db: Session, item_id: str) -> dict:
 def get_user_info(db: Session) -> dict:
     """Datos del usuario autenticado — útil para verificar que la auth anda."""
     return _get(db, "/users/me")
+
+
+# =============================================================
+# Escrituras (write) — gateadas por is_write_enabled()
+# =============================================================
+
+def _put(db: Session, path: str, payload: dict) -> dict:
+    """
+    PUT autenticado. Maneja 401 con un retry tras forzar refresh del token.
+    NO chequea is_write_enabled aquí — eso es responsabilidad del caller
+    (las funciones públicas update_item_*).
+    """
+    token = get_access_token(db)
+    url = f"{ML_API_BASE}{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.put(url, headers=headers, json=payload, timeout=20)
+    except requests.RequestException as e:
+        raise MLClientError(f"Error de red en PUT {path}: {e}") from e
+
+    if response.status_code == 401:
+        _access_token_cache["expires_at"] = 0
+        token = get_access_token(db)
+        try:
+            response = requests.put(
+                url,
+                headers={**headers, "Authorization": f"Bearer {token}"},
+                json=payload,
+                timeout=20,
+            )
+        except requests.RequestException as e:
+            raise MLClientError(f"Error de red en PUT {path} (retry): {e}") from e
+
+    if not response.ok:
+        # ML suele devolver JSON con `message` y `cause` describiendo el problema.
+        # Tomamos los primeros 300 chars del body para no inundar el flash.
+        raise MLClientError(
+            f"ML PUT {path} → {response.status_code}: {response.text[:300]}"
+        )
+
+    return response.json()
+
+
+def update_item_stock(db: Session, item_id: str, available_quantity: int) -> dict:
+    """
+    PUT a /items/{id} con available_quantity nuevo.
+    El caller debe haber chequeado is_write_enabled() antes de llamar.
+    """
+    return _put(db, f"/items/{item_id}", {"available_quantity": int(available_quantity)})
+
+
+def update_item_price(db: Session, item_id: str, price) -> dict:
+    """
+    PUT a /items/{id} con price nuevo.
+    Convertimos a float porque ML espera number, no Decimal.
+    """
+    return _put(db, f"/items/{item_id}", {"price": float(price)})

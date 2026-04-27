@@ -1064,6 +1064,81 @@ def bulk_sync_oldest(db: Session, limit: int = 50) -> tuple[int, int, list[str]]
     return ok, len(skus), errors
 
 
+def push_to_ml(
+    db: Session,
+    sku: str,
+    *,
+    push_stock: bool = True,
+    push_price: bool = True,
+) -> tuple[bool, str]:
+    """
+    Empuja stock_actual y/o precio_final del DB local a la publicación de ML.
+    Solo lo hace si write sync está habilitado (ML_SYNC_WRITE_ENABLED=true).
+
+    Devuelve (ok, mensaje).
+      - ok=True si TODOS los pushes pedidos salieron bien
+      - ok=False si alguno falló (mensaje describe cuál)
+
+    El cambio local NO se revierte si el push falla — la idea es que el
+    panel siempre refleje la intención del usuario, y el drift queda
+    visible para reintentar.
+    """
+    from . import ml_client
+
+    if not ml_client.is_write_enabled():
+        return False, (
+            "Write sync ML deshabilitado. "
+            "Para activar, seteá ML_SYNC_WRITE_ENABLED=true en Render."
+        )
+
+    prod = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return False, f"SKU '{sku}' no existe"
+    if not prod.ml_item_id:
+        return False, "Producto no vinculado a ML (sin ml_item_id)"
+
+    # Decidir qué pushear según los flags y los datos disponibles
+    actions = []
+    if push_stock:
+        actions.append("stock")
+    if push_price and prod.precio_final is not None:
+        actions.append("precio")
+
+    if not actions:
+        return False, "Nada para pushear (precio vacío o flags desactivados)"
+
+    msgs: list[str] = []
+    errors: list[str] = []
+
+    if "stock" in actions:
+        try:
+            ml_client.update_item_stock(db, prod.ml_item_id, prod.stock_actual)
+            prod.ml_stock = prod.stock_actual
+            msgs.append(f"stock={prod.stock_actual}")
+        except ml_client.MLClientError as e:
+            errors.append(f"stock falló: {e}")
+
+    if "precio" in actions:
+        try:
+            ml_client.update_item_price(db, prod.ml_item_id, prod.precio_final)
+            prod.ml_precio = prod.precio_final
+            msgs.append(f"precio=${prod.precio_final:,.0f}")
+        except ml_client.MLClientError as e:
+            errors.append(f"precio falló: {e}")
+
+    if msgs:
+        prod.ml_last_synced_at = datetime.now(timezone.utc)
+    db.commit()
+
+    if not errors:
+        return True, f"↑ ML: {', '.join(msgs)}"
+    if msgs:
+        return False, f"↑ ML parcial: {', '.join(msgs)} · {' · '.join(errors)}"
+    return False, " · ".join(errors)
+
+
 def sync_producto_from_ml(db: Session, sku: str) -> tuple[bool, str]:
     """
     Pulla datos frescos del item en ML y los guarda como snapshot
