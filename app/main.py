@@ -462,6 +462,58 @@ async def catalogo_ml_link_upload(
     return RedirectResponse("/catalogo", status_code=303)
 
 
+@app.post("/catalogo/ml-link/sync-batch")
+def catalogo_ml_sync_batch(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Sincroniza desde ML los 50 productos vinculados con sync más antiguo.
+    Ideal para procesar lotes grandes recién linkeados sin tener que clickear
+    sync individual en cada uno.
+    """
+    BATCH = 50
+    try:
+        ok, total, errores = catalogo.bulk_sync_oldest(db, limit=BATCH)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    if total == 0:
+        request.session["flash"] = {
+            "type": "success",
+            "msg": "No hay más productos vinculados pendientes de sync. Todo al día.",
+        }
+    elif ok == total:
+        request.session["flash"] = {
+            "type": "success",
+            "msg": f"✓ {ok} productos sincronizados desde ML. Si quedan más, volvé a apretar.",
+        }
+    else:
+        msg = (
+            f"{ok}/{total} OK · {len(errores)} errores: "
+            + " · ".join(errores[:3])
+        )
+        if len(errores) > 3:
+            msg += f" (+{len(errores) - 3} más)"
+        request.session["flash"] = {
+            "type": "warning" if ok else "error",
+            "msg": msg,
+        }
+
+    return RedirectResponse("/catalogo", status_code=303)
+
+
 @app.get("/catalogo/ml-link/template")
 def catalogo_ml_link_template(user: str = Depends(auth.require_user)):
     """Excel template para el bulk linkeo (3 columnas: SKU, ML_Item_ID, ML_Permalink)."""

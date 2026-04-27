@@ -162,6 +162,18 @@
     Si un SKU no está en el catálogo, se crea como <strong>placeholder</strong>: producto vacío con sólo SKU + ml_item_id;
     cuando subas el Excel master se completan los demás campos sin perder el link.
   </div>
+
+  <div style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-soft);">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <form method="post" action="/catalogo/ml-link/sync-batch" style="margin: 0;">
+        <button type="submit" class="btn">↻ Sync 50 más antiguos desde ML</button>
+      </form>
+      <span style="font-size: 12px; color: var(--muted);">
+        Trae precio/stock/status reales de ML para los productos vinculados.
+        Procesa los 50 con sync más antiguo (o sin sync nunca). Repetí hasta que todo esté al día.
+      </span>
+    </div>
+  </div>
 </div>
 
 <form method="get" action="/catalogo" class="search-form">

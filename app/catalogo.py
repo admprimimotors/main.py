@@ -1022,6 +1022,48 @@ def generate_ml_link_template() -> bytes:
 # Sync desde ML (read-only)
 # =============================================================
 
+def bulk_sync_oldest(db: Session, limit: int = 50) -> tuple[int, int, list[str]]:
+    """
+    Sincroniza los N productos vinculados con sync más antiguo (o nunca sync'd).
+    Devuelve (ok, total_intentados, lista_de_errores).
+
+    Estrategia: NULLS FIRST en ASC sobre ml_last_synced_at — primero los que
+    nunca se sincronizaron, después los más viejos. Así cada click va atacando
+    los más desactualizados.
+    """
+    from . import ml_client
+
+    if not ml_client.is_configured():
+        return 0, 0, ["ML no está configurado (faltan env vars ML_*)"]
+
+    # Tomamos solo los SKUs (no el objeto entero, lo carga sync_producto_from_ml)
+    q = (
+        select(Producto.sku)
+        .where(Producto.ml_item_id.is_not(None))
+        .order_by(Producto.ml_last_synced_at.asc().nulls_first())
+        .limit(limit)
+    )
+    skus = [s for (s,) in db.execute(q).all()]
+
+    if not skus:
+        return 0, 0, []
+
+    ok = 0
+    errors: list[str] = []
+    for sku in skus:
+        try:
+            success, msg = sync_producto_from_ml(db, sku)
+        except Exception as e:
+            success = False
+            msg = f"{type(e).__name__}: {e}"
+        if success:
+            ok += 1
+        else:
+            errors.append(f"{sku}: {msg}")
+
+    return ok, len(skus), errors
+
+
 def sync_producto_from_ml(db: Session, sku: str) -> tuple[bool, str]:
     """
     Pulla datos frescos del item en ML y los guarda como snapshot
