@@ -25,11 +25,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session as DbSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, catalogo, database, storage
+from . import auth, catalogo, database, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -385,6 +385,119 @@ def catalogo_foto_delete(
 
 
 # ===============================================================
+# Stock — resumen, listado de stock bajo, bulk update
+# ===============================================================
+
+@app.get("/stock", response_class=HTMLResponse)
+def stock_view(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Página principal de stock: summary + low-stock + upload form."""
+    summary = stock.get_summary(db)
+    low_stock_list = stock.list_low_stock(db, threshold=summary["low_threshold"])
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "stock.html",
+        {
+            "user": user,
+            "active": "stock",
+            "version": APP_VERSION,
+            "summary": summary,
+            "low_stock_list": low_stock_list,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/stock/upload")
+async def stock_upload(
+    request: Request,
+    archivo: UploadFile = File(...),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Recibe un Excel simplificado (SKU + Stock_Actual) y actualiza solo el stock."""
+    fname = (archivo.filename or "").lower()
+    if not fname.endswith((".xlsx", ".xls")):
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "El archivo debe ser .xlsx o .xls",
+        }
+        return RedirectResponse("/stock", status_code=303)
+
+    try:
+        file_bytes = await archivo.read()
+        result = stock.process_stock_upload(db, file_bytes)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/stock", status_code=303)
+
+    if result.ok:
+        request.session["flash"] = {
+            "type": "success",
+            "msg": f"✓ {result.actualizados} producto{'' if result.actualizados == 1 else 's'} actualizado{'' if result.actualizados == 1 else 's'}.",
+        }
+    else:
+        msg = (
+            f"Procesado con errores. "
+            f"Actualizados: {result.actualizados}. "
+            f"Errores: {' · '.join(result.errores[:5])}"
+        )
+        if len(result.errores) > 5:
+            msg += f" (+{len(result.errores) - 5} más)"
+        request.session["flash"] = {
+            "type": "warning" if result.actualizados else "error",
+            "msg": msg,
+        }
+
+    return RedirectResponse("/stock", status_code=303)
+
+
+@app.get("/stock/template")
+def stock_template(user: str = Depends(auth.require_user)):
+    """Excel template simplificado para el upload masivo."""
+    excel_bytes = stock.generate_stock_template()
+    return Response(
+        content=excel_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": 'attachment; filename="primi_motors_stock_template.xlsx"'
+        },
+    )
+
+
+@app.post("/catalogo/{sku}/stock")
+def catalogo_stock_update(
+    request: Request,
+    sku: str,
+    stock_value: int = Form(..., alias="stock"),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Ajuste rápido de stock desde la vista detalle (set absoluto, +1 o -1)."""
+    ok, msg = stock.update_stock(db, sku, stock_value)
+    request.session["flash"] = {
+        "type": "success" if ok else "error",
+        "msg": msg,
+    }
+    return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+
+# ===============================================================
 # Stubs — secciones todavía sin construir
 # ===============================================================
 # Cada feature real va a reemplazar uno de estos handlers cuando esté lista.
@@ -393,9 +506,7 @@ def catalogo_foto_delete(
 
 _STUBS = [
     # "catalogo" ya no es stub — vive en su propio módulo (app/catalogo.py + rutas más abajo)
-    ("stock", "Stock",
-     "Niveles de stock por SKU, alertas de bajo stock y reactivación "
-     "de ítems pausados en Mercado Libre."),
+    # "stock" ya no es stub — vive en app/stock.py + rutas dedicadas
     ("publicaciones", "Publicaciones ML",
      "Estado de los ítems publicados en Mercado Libre — pausar, "
      "republicar y ver estadísticas de cada uno."),
