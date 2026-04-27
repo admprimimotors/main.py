@@ -225,6 +225,26 @@
     </div>
   </div>
 
+  {# Diagnóstico del scope — muestra resumen de cuántos productos hubo y por qué se saltearon #}
+  <div style="display: flex; gap: 14px; flex-wrap: wrap; padding: 14px 0; border-bottom: 1px solid var(--border-soft); margin-bottom: 14px; font-size: 13px;">
+    <span style="color: var(--muted-strong);"><strong>{{ preview.scope_total }}</strong> productos en scope</span>
+    {% if preview.skipped_no_costo %}
+      <span style="color: #fcd34d;">⚠ {{ preview.skipped_no_costo }} sin precio_costo</span>
+    {% endif %}
+    {% if preview.skipped_no_final %}
+      <span style="color: #fcd34d;">⚠ {{ preview.skipped_no_final }} sin precio_final</span>
+    {% endif %}
+    {% if preview.skipped_keep_margen_incompleto %}
+      <span style="color: #fcd34d;">⚠ {{ preview.skipped_keep_margen_incompleto }} sin ambos precios para mantener margen</span>
+    {% endif %}
+    {% if preview.skipped_no_change %}
+      <span style="color: var(--muted);">{{ preview.skipped_no_change }} no cambian (mismo valor tras redondeo)</span>
+    {% endif %}
+    {% if preview.skipped_negative %}
+      <span style="color: #fca5a5;">{{ preview.skipped_negative }} darían negativo</span>
+    {% endif %}
+  </div>
+
   {% if preview.changes %}
   <div style="overflow-x: auto; max-height: 500px; overflow-y: auto;">
     <table class="preview-table">
@@ -236,6 +256,7 @@
           <th class="num" style="text-align: right;">Actual</th>
           <th class="num" style="text-align: right;">Nuevo</th>
           <th class="num" style="text-align: right;">Δ</th>
+          <th class="num" style="text-align: right;">Margen</th>
         </tr>
       </thead>
       <tbody>
@@ -249,6 +270,16 @@
           <td style="text-align: right;" class="{{ 'delta-up' if c.delta > 0 else 'delta-down' }}">
             {{ '+' if c.delta > 0 else '' }}${{ "{:,.0f}".format(c.delta|float) }}
             ({{ '+' if c.delta_pct > 0 else '' }}{{ "{:.1f}".format(c.delta_pct|float) }}%)
+          </td>
+          <td style="text-align: right;">
+            {% if c.margen_actual is not none and c.margen_nuevo is not none %}
+              {% set m_color = 'delta-up' if c.margen_nuevo > c.margen_actual else ('delta-down' if c.margen_nuevo < c.margen_actual else '') %}
+              <span style="color: var(--muted);">{{ "{:.1f}".format(c.margen_actual|float) }}%</span>
+              <span style="color: var(--muted);"> → </span>
+              <strong class="{{ m_color }}">{{ "{:.1f}".format(c.margen_nuevo|float) }}%</strong>
+            {% else %}
+              <span style="color: var(--muted);">—</span>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -285,8 +316,21 @@
   </form>
   {% else %}
   <div style="padding: 24px; text-align: center; color: var(--muted); font-size: 13px;">
-    La fórmula no produce cambios sobre los productos del scope.
-    Probá distintos parámetros o ampliá los filtros.
+    {% if preview.scope_total == 0 %}
+      Ningún producto matchea los filtros. Probá ampliar el scope (sacar marca o categoría).
+    {% elif preview.skipped_no_costo == preview.scope_total and form.target in ('costo', 'ambos') %}
+      <strong style="color: #fcd34d;">Ningún producto del scope tiene precio_costo cargado.</strong><br>
+      Los placeholders sincronizados desde ML solo traen precio_final (ML no sabe tu costo).
+      Cargá los costos primero — Excel master con columna <code>Precio_Costo</code> o <code>/precios</code> con Excel solo precios.
+    {% elif preview.skipped_no_final == preview.scope_total and form.target in ('final', 'ambos') %}
+      <strong style="color: #fcd34d;">Ningún producto del scope tiene precio_final cargado.</strong>
+    {% elif preview.skipped_keep_margen_incompleto == preview.scope_total and form.target == 'costo_keep_margen' %}
+      <strong style="color: #fcd34d;">Ningún producto tiene ambos precios cargados</strong> — para mantener margen necesitás costo Y final seteados. Cargá ambos primero.
+    {% elif preview.skipped_no_change %}
+      La fórmula no produce diff (probablemente por el redondeo). Probá un valor más grande o sin redondear.
+    {% else %}
+      Sin cambios para aplicar con estos parámetros.
+    {% endif %}
   </div>
   {% endif %}
 </div>

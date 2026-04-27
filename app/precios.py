@@ -24,6 +24,7 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Optional
 
 import pandas as pd
 from sqlalchemy import or_, select
@@ -72,6 +73,11 @@ class PrecioChange:
     campo: str            # "precio_costo" o "precio_final"
     valor_actual: Decimal
     valor_nuevo: Decimal
+    # Margen implícito antes y después del cambio (computados a nivel SKU,
+    # iguales en ambas filas cuando un mismo SKU tiene 2 cambios).
+    # None si falta uno de los dos precios → no hay margen calculable.
+    margen_actual: Optional[Decimal] = None
+    margen_nuevo: Optional[Decimal] = None
 
     @property
     def delta(self) -> Decimal:
@@ -92,6 +98,18 @@ class PreciosUploadResult:
     @property
     def ok(self) -> bool:
         return len(self.errores) == 0
+
+
+@dataclass
+class PrecioPreview:
+    """Resultado del cálculo de cambios + diagnóstico del scope."""
+    changes: list[PrecioChange] = field(default_factory=list)
+    scope_total: int = 0           # cuántos productos matchean los filtros
+    skipped_no_costo: int = 0      # productos en scope sin precio_costo
+    skipped_no_final: int = 0      # productos en scope sin precio_final
+    skipped_no_change: int = 0     # la fórmula no produce diff
+    skipped_negative: int = 0      # el resultado sería negativo
+    skipped_keep_margen_incompleto: int = 0  # falta uno de los precios para keep_margen
 
 
 # =============================================================
@@ -128,6 +146,18 @@ def _redondear(valor: Decimal, redondeo: int) -> Decimal:
     return (valor / base).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * base
 
 
+def _compute_margen(
+    costo: Optional[Decimal],
+    final: Optional[Decimal],
+) -> Optional[Decimal]:
+    """Margen implícito (final - costo) / costo * 100. None si falta data."""
+    if costo is None or final is None or costo == 0:
+        return None
+    return ((final - costo) / costo * Decimal("100")).quantize(
+        Decimal("0.1"), rounding=ROUND_HALF_UP
+    )
+
+
 # =============================================================
 # Cambios por fórmula — preview (dry run) + aplicación
 # =============================================================
@@ -144,11 +174,16 @@ def compute_precio_changes(
     categoria: str = "",
     marca: str = "",
     vinculadas: str = "",
-) -> list[PrecioChange]:
+    return_preview: bool = False,
+) -> list[PrecioChange] | PrecioPreview:
     """
     Computa los cambios sin aplicarlos (dry run para preview).
     Solo incluye productos `activos`.
     Excluye cambios que dejarían precio negativo o que no producen diff.
+
+    Si `return_preview=True`, devuelve un PrecioPreview con changes + diagnóstico
+    del scope (cuántos productos hay, cuántos se saltearon y por qué).
+    Si False (default), devuelve solo la lista de changes — útil para el apply.
     """
     if operacion not in OPERACIONES:
         raise ValueError(f"Operación inválida: {operacion}")
@@ -177,73 +212,93 @@ def compute_precio_changes(
     q = q.order_by(Producto.sku)
 
     productos = db.execute(q).scalars().all()
+    preview = PrecioPreview(scope_total=len(productos))
 
-    changes: list[PrecioChange] = []
-
-    # Modo especial: aplicar al costo y recalcular el final manteniendo el margen
-    # implícito (precio_final / precio_costo).
-    if target == "costo_keep_margen":
-        for prod in productos:
-            actual_costo = prod.precio_costo
-            actual_final = prod.precio_final
-            # Necesitamos ambos precios para inferir el margen
-            if actual_costo is None or actual_final is None or actual_costo == 0:
-                continue
-            try:
-                nuevo_costo = _aplicar_operacion(actual_costo, operacion, valor)
-            except Exception:
-                continue
-            nuevo_costo = _redondear(nuevo_costo, redondeo)
-            if nuevo_costo < 0 or nuevo_costo == actual_costo:
-                continue
-
-            # factor multiplicativo (preserva ratio costo→final)
-            factor = actual_final / actual_costo
-            nuevo_final = _redondear(nuevo_costo * factor, redondeo)
-            if nuevo_final < 0:
-                continue
-
-            changes.append(PrecioChange(
-                sku=prod.sku, titulo=prod.titulo, campo="precio_costo",
-                valor_actual=actual_costo, valor_nuevo=nuevo_costo,
-            ))
-            if nuevo_final != actual_final:
-                changes.append(PrecioChange(
-                    sku=prod.sku, titulo=prod.titulo, campo="precio_final",
-                    valor_actual=actual_final, valor_nuevo=nuevo_final,
-                ))
-        return changes
-
-    # Modo simple: aplicar la misma operación a costo y/o final independientemente
-    campos = []
-    if target in ("costo", "ambos"):
-        campos.append("precio_costo")
-    if target in ("final", "ambos"):
-        campos.append("precio_final")
+    cambia_costo = target in ("costo", "ambos", "costo_keep_margen")
+    cambia_final = target in ("final", "ambos", "costo_keep_margen")
 
     for prod in productos:
-        for campo in campos:
-            actual = getattr(prod, campo)
-            if actual is None:
-                continue
-            try:
-                nuevo = _aplicar_operacion(actual, operacion, valor)
-            except Exception:
-                continue
-            nuevo = _redondear(nuevo, redondeo)
-            if nuevo < 0:
-                continue
-            if nuevo == actual:
-                continue
-            changes.append(PrecioChange(
-                sku=prod.sku,
-                titulo=prod.titulo,
-                campo=campo,
-                valor_actual=actual,
-                valor_nuevo=nuevo,
-            ))
+        actual_costo = prod.precio_costo
+        actual_final = prod.precio_final
 
-    return changes
+        # Modo keep_margen: necesita ambos precios + costo > 0
+        if target == "costo_keep_margen":
+            if actual_costo is None or actual_final is None or actual_costo == 0:
+                preview.skipped_keep_margen_incompleto += 1
+                continue
+
+        # ---- Calcular nuevo_costo ----
+        nuevo_costo = actual_costo
+        costo_skipped_reason = None
+        if cambia_costo:
+            if actual_costo is None:
+                preview.skipped_no_costo += 1
+                costo_skipped_reason = "no_costo"
+            else:
+                try:
+                    nc = _redondear(_aplicar_operacion(actual_costo, operacion, valor), redondeo)
+                    if nc < 0:
+                        preview.skipped_negative += 1
+                        costo_skipped_reason = "negative"
+                    else:
+                        nuevo_costo = nc
+                except Exception:
+                    costo_skipped_reason = "error"
+
+        # ---- Calcular nuevo_final ----
+        nuevo_final = actual_final
+        final_skipped_reason = None
+        if cambia_final:
+            if target == "costo_keep_margen":
+                # Recalcular final preservando el factor multiplicativo
+                if nuevo_costo is not None and actual_costo and actual_final is not None:
+                    factor = actual_final / actual_costo
+                    nf = _redondear(nuevo_costo * factor, redondeo)
+                    if nf < 0:
+                        preview.skipped_negative += 1
+                        final_skipped_reason = "negative"
+                    else:
+                        nuevo_final = nf
+            else:
+                if actual_final is None:
+                    preview.skipped_no_final += 1
+                    final_skipped_reason = "no_final"
+                else:
+                    try:
+                        nf = _redondear(_aplicar_operacion(actual_final, operacion, valor), redondeo)
+                        if nf < 0:
+                            preview.skipped_negative += 1
+                            final_skipped_reason = "negative"
+                        else:
+                            nuevo_final = nf
+                    except Exception:
+                        final_skipped_reason = "error"
+
+        # ---- Margens (consistentes con el estado FINAL del producto) ----
+        margen_actual = _compute_margen(actual_costo, actual_final)
+        margen_nuevo = _compute_margen(nuevo_costo, nuevo_final)
+
+        # ---- Crear filas para los cambios reales ----
+        if cambia_costo and costo_skipped_reason is None and actual_costo is not None:
+            if nuevo_costo == actual_costo:
+                preview.skipped_no_change += 1
+            else:
+                preview.changes.append(PrecioChange(
+                    sku=prod.sku, titulo=prod.titulo, campo="precio_costo",
+                    valor_actual=actual_costo, valor_nuevo=nuevo_costo,
+                    margen_actual=margen_actual, margen_nuevo=margen_nuevo,
+                ))
+        if cambia_final and final_skipped_reason is None and actual_final is not None:
+            if nuevo_final == actual_final:
+                preview.skipped_no_change += 1
+            else:
+                preview.changes.append(PrecioChange(
+                    sku=prod.sku, titulo=prod.titulo, campo="precio_final",
+                    valor_actual=actual_final, valor_nuevo=nuevo_final,
+                    margen_actual=margen_actual, margen_nuevo=margen_nuevo,
+                ))
+
+    return preview if return_preview else preview.changes
 
 
 def apply_precio_changes(db: Session, changes: list[PrecioChange]) -> int:

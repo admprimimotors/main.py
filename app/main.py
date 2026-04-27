@@ -1126,7 +1126,7 @@ def precios_preview(
         return _precios_render(request, user, db, form=form)
 
     try:
-        changes = precios.compute_precio_changes(
+        preview_obj = precios.compute_precio_changes(
             db,
             operacion=operacion,
             valor=valor_dec,
@@ -1136,6 +1136,7 @@ def precios_preview(
             categoria=categoria,
             marca=marca,
             vinculadas=vinculadas,
+            return_preview=True,
         )
     except Exception as e:
         import traceback
@@ -1146,9 +1147,7 @@ def precios_preview(
         }
         return _precios_render(request, user, db, form=form)
 
-    return _precios_render(
-        request, user, db, form=form, preview={"changes": changes}
-    )
+    return _precios_render(request, user, db, form=form, preview=preview_obj)
 
 
 @app.post("/precios/apply")
