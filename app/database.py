@@ -139,6 +139,17 @@ def _apply_migrations() -> None:
         ALTER TABLE productos
         ADD COLUMN IF NOT EXISTS ml_comision_pct NUMERIC(5, 2)
         """,
+        # v10 (2026-04-27): atributos crudos de ML para round-trip (push correcto).
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS ml_raw_attributes JSONB
+        """,
+        # v11 (2026-04-27): ID de compatibilidad en ML para round-trip.
+        """
+        ALTER TABLE producto_compatibilidades
+        ADD COLUMN IF NOT EXISTS ml_compat_id VARCHAR(64)
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_proco_ml_compat_id ON producto_compatibilidades(ml_compat_id)",
     ]
     try:
         with engine.begin() as conn:

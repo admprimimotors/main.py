@@ -1468,6 +1468,48 @@ def update_producto_basic(
     return True, f"✓ {len(cambios)} campo{'' if len(cambios) == 1 else 's'} actualizado{'' if len(cambios) == 1 else 's'}", cambios
 
 
+def _diff_attributes_for_push(
+    raw_attributes: list,
+    ficha_tecnica: dict,
+) -> list[dict]:
+    """
+    Compara los valores actuales en ficha_tecnica con los raw_attributes
+    originales de ML. Devuelve la lista de atributos que cambiaron, en formato
+    {id, value_name} listo para mandar a `PUT /items/{id}`.
+
+    Estrategia:
+      - Por cada raw_attr, calculamos su key normalizada (igual que el sync hace)
+      - Buscamos esa key en ficha_tecnica — si está y difiere del value_name
+        original, es un cambio para pushear
+      - Solo se incluyen atributos que ya existían en ML (no atributos custom
+        que el usuario sumó a la ficha localmente — esos no tienen ID en ML)
+    """
+    if not raw_attributes:
+        return []
+    ficha = ficha_tecnica or {}
+    cambios: list[dict] = []
+    for raw in raw_attributes:
+        attr_id = (raw.get("id") or "").strip()
+        if not attr_id:
+            continue
+        attr_name = raw.get("name") or attr_id
+        key = _norm_attr_key(attr_name) or _norm_attr_key(attr_id)
+        if not key or key not in ficha:
+            continue
+        original_value = _attr_value_str(raw)
+        current_value = ficha.get(key)
+        if current_value is None:
+            continue
+        # Comparar como strings (ficha guarda strings normalmente)
+        if str(current_value).strip() == str(original_value).strip():
+            continue
+        cambios.append({
+            "id": attr_id,
+            "value_name": str(current_value).strip(),
+        })
+    return cambios
+
+
 def push_to_ml(
     db: Session,
     sku: str,
@@ -1475,17 +1517,17 @@ def push_to_ml(
     push_stock: bool = True,
     push_price: bool = True,
     push_description: bool = False,
+    push_attributes: bool = False,
 ) -> tuple[bool, str]:
     """
-    Empuja stock_actual y/o precio_final y/o descripcion del DB local a la
+    Empuja stock / precio / descripción / atributos del DB local a la
     publicación de ML. Solo si write sync está habilitado.
 
-    Devuelve (ok, mensaje).
-      - ok=True si TODOS los pushes pedidos salieron bien
-      - ok=False si alguno falló (mensaje describe cuál)
+    Para `push_attributes`: solo se mandan atributos cuyo valor en
+    `ficha_tecnica` difiere del value_name original que ML reportó.
+    Atributos nuevos (sin ID de ML) no se pushean — los ignora.
 
-    El cambio local NO se revierte si el push falla — el panel siempre
-    refleja la intención del usuario, y el drift queda visible.
+    Devuelve (ok, mensaje).
     """
     from . import ml_client
 
@@ -1503,6 +1545,13 @@ def push_to_ml(
     if not prod.ml_item_id:
         return False, "Producto no vinculado a ML (sin ml_item_id)"
 
+    # Calcular cambios de atributos antes (para saber si hay que pushear)
+    attr_changes: list[dict] = []
+    if push_attributes:
+        attr_changes = _diff_attributes_for_push(
+            prod.ml_raw_attributes or [], prod.ficha_tecnica or {}
+        )
+
     # Decidir qué pushear según los flags y los datos disponibles
     actions = []
     if push_stock:
@@ -1511,9 +1560,11 @@ def push_to_ml(
         actions.append("precio")
     if push_description and (prod.descripcion or "").strip():
         actions.append("descripcion")
+    if push_attributes and attr_changes:
+        actions.append("atributos")
 
     if not actions:
-        return False, "Nada para pushear (sin precio, descripción vacía o flags desactivados)"
+        return False, "Nada para pushear (sin cambios o flags desactivados)"
 
     msgs: list[str] = []
     errors: list[str] = []
@@ -1542,6 +1593,22 @@ def push_to_ml(
             msgs.append("descripción")
         except ml_client.MLClientError as e:
             errors.append(f"descripción falló: {e}")
+
+    if "atributos" in actions:
+        try:
+            ml_client.update_item_attributes(db, prod.ml_item_id, attr_changes)
+            msgs.append(f"{len(attr_changes)} atributos")
+            # Refrescamos los raw_attributes con los nuevos values (parche optimista)
+            updated_raw = list(prod.ml_raw_attributes or [])
+            changes_by_id = {c["id"]: c["value_name"] for c in attr_changes}
+            for r in updated_raw:
+                if r.get("id") in changes_by_id:
+                    r["value_name"] = changes_by_id[r["id"]]
+                    r.pop("value_struct", None)  # ML resolverá
+                    r.pop("value_id", None)
+            prod.ml_raw_attributes = updated_raw
+        except ml_client.MLClientError as e:
+            errors.append(f"atributos fallaron: {e}")
 
     if msgs:
         prod.ml_last_synced_at = datetime.now(timezone.utc)
@@ -1725,6 +1792,12 @@ def sync_producto_from_ml(
                 prod.descripcion = desc_text[:50000]
                 hidratado.append("descripción")
 
+        # Atributos crudos: guardamos el array completo (con value_id, value_struct
+        # y demás) para poder PUSHEAR cambios después manteniendo los IDs de ML.
+        raw_attrs = item.get("attributes") or []
+        if raw_attrs:
+            prod.ml_raw_attributes = raw_attrs
+
         # Atributos + sale_terms → ficha_tecnica (additive merge: solo agregamos
         # claves que NO existan ya, así no pisamos ediciones manuales).
         existing_ficha = dict(prod.ficha_tecnica or {})
@@ -1766,6 +1839,92 @@ def sync_producto_from_ml(
             hidratado.append(
                 f"{nuevos_attrs} atributo{'' if nuevos_attrs == 1 else 's'} en ficha"
             )
+
+        # Compatibilidades vehiculares — endpoint separado.
+        # Las creamos localmente si no están ya (matching por ml_compat_id).
+        try:
+            ml_compats = ml_client.get_item_compatibilities(db, prod.ml_item_id)
+        except Exception:
+            ml_compats = []
+
+        if ml_compats:
+            # Cargar set de ml_compat_ids ya conocidos para este producto
+            existing_ml_ids = set(
+                row[0] for row in db.execute(
+                    select(ProductoCompatibilidad.ml_compat_id)
+                    .where(
+                        ProductoCompatibilidad.producto_id == prod.id,
+                        ProductoCompatibilidad.ml_compat_id.is_not(None),
+                    )
+                ).all()
+                if row[0]
+            )
+            cache_v: dict = {}
+            nuevas_compats = 0
+            for compat in ml_compats:
+                ml_id = str(compat.get("id") or "")
+                if not ml_id or ml_id in existing_ml_ids:
+                    continue
+                # Extraer atributos del compat
+                cattrs = {a.get("id"): a for a in (compat.get("attributes") or [])}
+                marca_a = cattrs.get("VEHICLE_BRAND") or cattrs.get("BRAND")
+                modelo_a = cattrs.get("VEHICLE_MODEL") or cattrs.get("MODEL")
+                year_a = cattrs.get("VEHICLE_YEAR") or cattrs.get("YEAR")
+                if not marca_a or not modelo_a:
+                    continue
+                marca_v = (marca_a.get("value_name") or "").strip()
+                modelo_v = (modelo_a.get("value_name") or "").strip()
+                if not marca_v or not modelo_v:
+                    continue
+                # Año: puede venir como "1985" o como rango en value_struct
+                anio_desde = anio_hasta = None
+                if year_a:
+                    yt = (year_a.get("value_name") or "").strip()
+                    if "-" in yt:
+                        parts = yt.split("-")
+                        try:
+                            anio_desde = int(parts[0].strip())
+                            anio_hasta = int(parts[1].strip())
+                        except (ValueError, IndexError):
+                            pass
+                    elif yt.isdigit():
+                        anio_desde = anio_hasta = int(yt)
+                v, _ = _get_or_create_vehiculo(
+                    db,
+                    marca=marca_v[:80],
+                    modelo=modelo_v[:120],
+                    combustible=None,
+                    cilindros=None,
+                    valvulas=None,
+                    cilindrada_cc=None,
+                    anio_desde=anio_desde,
+                    anio_hasta=anio_hasta,
+                    cache=cache_v,
+                )
+                # Si ya hay un link al mismo vehículo sin ml_compat_id, lo asociamos
+                # con este ml_id (en lugar de crear duplicado).
+                existing_link = db.execute(
+                    select(ProductoCompatibilidad).where(
+                        ProductoCompatibilidad.producto_id == prod.id,
+                        ProductoCompatibilidad.vehiculo_id == v.id,
+                    )
+                ).scalar_one_or_none()
+                if existing_link is not None:
+                    if not existing_link.ml_compat_id:
+                        existing_link.ml_compat_id = ml_id
+                        nuevas_compats += 1
+                    continue
+                # Crear link nuevo
+                db.add(ProductoCompatibilidad(
+                    producto_id=prod.id,
+                    vehiculo_id=v.id,
+                    ml_compat_id=ml_id,
+                ))
+                nuevas_compats += 1
+            if nuevas_compats > 0:
+                hidratado.append(
+                    f"{nuevas_compats} compatibilidad{'es' if nuevas_compats != 1 else ''}"
+                )
 
         # Fotos: si no hay fotos en R2, descargar las de ML
         existing_photos = int(db.execute(

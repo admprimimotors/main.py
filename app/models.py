@@ -118,6 +118,10 @@ class Producto(Base):
     # Comisión real ML para esta publicación (varía por categoría + tipo).
     # Se autocompleta al sincronizar con ML via /sites/MLA/listing_prices.
     ml_comision_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    # Atributos crudos como ML los entrega (con value_id, value_struct, etc.).
+    # Necesarios para PUSH: nos dan los IDs originales para mantener integridad
+    # cuando enviamos cambios de la ficha técnica de vuelta a ML.
+    ml_raw_attributes: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     # Auditoría
     created_at: Mapped[datetime] = mapped_column(
@@ -270,6 +274,10 @@ class ProductoCompatibilidad(Base):
     # Notas opcionales sobre la compatibilidad
     # (ej: "lado izquierdo", "solo para versión naftera")
     notas: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # ID de la compatibilidad en ML (cuando viene sincronizada desde ML).
+    # Permite round-trip: si la borrás localmente, sabemos qué borrar de ML.
+    ml_compat_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

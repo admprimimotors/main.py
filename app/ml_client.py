@@ -380,3 +380,36 @@ def update_item_description(db: Session, item_id: str, plain_text: str) -> dict:
     El caller debe haber chequeado is_write_enabled() antes.
     """
     return _put(db, f"/items/{item_id}/description", {"plain_text": plain_text})
+
+
+def update_item_attributes(db: Session, item_id: str, attributes: list) -> dict:
+    """
+    PUT /items/{id} con un array de atributos parciales (solo los que cambian).
+    Cada elemento debe ser {id: ..., value_name|value_id|value_struct: ...}.
+    """
+    return _put(db, f"/items/{item_id}", {"attributes": attributes})
+
+
+# =============================================================
+# Compatibilidades (vehículos compatibles)
+# =============================================================
+
+def get_item_compatibilities(db: Session, item_id: str) -> list:
+    """
+    GET /items/{id}/compatibilities → lista de compatibilidades vehiculares.
+    Cada compat tiene: id (de ML), domain_id, attributes (con VEHICLE_BRAND,
+    VEHICLE_MODEL, VEHICLE_YEAR, etc.).
+    Devuelve [] si falla — no levanta para no cortar el sync.
+    """
+    if not item_id:
+        return []
+    try:
+        resp = _get(db, f"/items/{item_id}/compatibilities")
+    except MLClientError:
+        return []
+    # ML puede devolver {results: [...]} o el array directo según endpoint
+    if isinstance(resp, dict):
+        return list(resp.get("results") or [])
+    if isinstance(resp, list):
+        return resp
+    return []

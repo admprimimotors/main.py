@@ -30,7 +30,7 @@ from . import auth, catalogo, database, ml_client, precios, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.19.0"
+APP_VERSION = "0.20.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1060,8 +1060,9 @@ def catalogo_ml_push(
     db: DbSession = Depends(get_db),
 ):
     """
-    Push manual del producto entero (stock + precio + descripción del DB local) a
-    la publicación de ML. Útil después de updates bulk donde no auto-pusheamos.
+    Push manual del producto entero (stock + precio + descripción + atributos del
+    DB local) a la publicación de ML. Útil después de updates bulk donde no
+    auto-pusheamos.
     """
     try:
         ok, msg = catalogo.push_to_ml(
@@ -1069,6 +1070,7 @@ def catalogo_ml_push(
             push_stock=True,
             push_price=True,
             push_description=True,
+            push_attributes=True,
         )
     except Exception as e:
         import traceback
