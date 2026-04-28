@@ -354,3 +354,29 @@ def update_item_price(db: Session, item_id: str, price) -> dict:
     Convertimos a float porque ML espera number, no Decimal.
     """
     return _put(db, f"/items/{item_id}", {"price": float(price)})
+
+
+# =============================================================
+# Descripción (endpoint separado)
+# =============================================================
+
+def get_item_description(db: Session, item_id: str) -> dict:
+    """
+    Trae la descripción del item. ML la expone en un endpoint separado
+    de /items/{id} — devuelve {plain_text, last_updated, ...}.
+    Devuelve {} si falla — no levanta para que el sync no se corte.
+    """
+    if not item_id:
+        return {}
+    try:
+        return _get(db, f"/items/{item_id}/description")
+    except MLClientError:
+        return {}
+
+
+def update_item_description(db: Session, item_id: str, plain_text: str) -> dict:
+    """
+    PUT a /items/{id}/description con texto nuevo.
+    El caller debe haber chequeado is_write_enabled() antes.
+    """
+    return _put(db, f"/items/{item_id}/description", {"plain_text": plain_text})

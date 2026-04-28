@@ -30,7 +30,7 @@ from . import auth, catalogo, database, ml_client, precios, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.18.0"
+APP_VERSION = "0.19.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1029,11 +1029,16 @@ def catalogo_editar_save(
         request.session["flash"] = {"type": "error", "msg": msg}
         return RedirectResponse(f"/catalogo/{sku}/editar", status_code=303)
 
-    # Si cambió el precio_final y el write sync está activo, auto-pushear precio a ML
-    if "precio_final" in cambios and ml_client.is_write_enabled():
+    # Auto-push a ML si está habilitado y hay cambios pusheables (precio o descripción).
+    push_price = "precio_final" in cambios
+    push_description = "descripcion" in cambios
+    if (push_price or push_description) and ml_client.is_write_enabled():
         try:
             push_ok, push_msg = catalogo.push_to_ml(
-                db, sku, push_stock=False, push_price=True
+                db, sku,
+                push_stock=False,
+                push_price=push_price,
+                push_description=push_description,
             )
         except Exception as e:
             push_ok = False
@@ -1055,11 +1060,16 @@ def catalogo_ml_push(
     db: DbSession = Depends(get_db),
 ):
     """
-    Push manual del producto entero (stock + precio del DB local) a la publicación
-    de ML. Útil después de updates bulk donde no auto-pusheamos.
+    Push manual del producto entero (stock + precio + descripción del DB local) a
+    la publicación de ML. Útil después de updates bulk donde no auto-pusheamos.
     """
     try:
-        ok, msg = catalogo.push_to_ml(db, sku, push_stock=True, push_price=True)
+        ok, msg = catalogo.push_to_ml(
+            db, sku,
+            push_stock=True,
+            push_price=True,
+            push_description=True,
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()

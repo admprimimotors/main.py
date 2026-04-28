@@ -18,6 +18,7 @@ Convenciones del Excel:
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -190,6 +191,47 @@ def _parse_decimal(v: Any) -> Optional[Decimal]:
         return Decimal(str(v).strip().replace(",", "."))
     except (InvalidOperation, ValueError):
         return None
+
+
+# -----------------------------------------------------------------
+# Helpers para procesar atributos / sale_terms de Mercado Libre
+# -----------------------------------------------------------------
+
+# Atributos ML que mapeamos a campos dedicados del producto (no a ficha_tecnica).
+# Si en ML hay BRAND, se guarda en producto.marca (no en la ficha).
+_ML_ATTR_TO_FIELD: dict[str, str] = {
+    "BRAND": "marca",
+}
+
+
+def _norm_attr_key(name: str) -> str:
+    """Normaliza un nombre de atributo a snake_case ASCII para usar como key del JSONB."""
+    if not name:
+        return ""
+    s = str(name).strip().lower()
+    for a, b in {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ñ": "n"}.items():
+        s = s.replace(a, b)
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s
+
+
+def _attr_value_str(attr: dict) -> str:
+    """
+    Extrae el valor legible de un atributo ML.
+    ML puede entregar el valor en varios shapes:
+      - value_name: string "Horario" o "30 cm"
+      - value_struct: {number, unit} para medidas
+      - value_id: id de la lista (fallback si no hay name)
+    """
+    val = attr.get("value_name")
+    if val:
+        return str(val).strip()
+    struct = attr.get("value_struct") or {}
+    num = struct.get("number")
+    if num is not None:
+        unit = (struct.get("unit") or "").strip()
+        return f"{num} {unit}".strip()
+    return str(attr.get("value_id") or "").strip()
 
 
 def _parse_bool(v: Any, default: bool = True) -> bool:
@@ -1432,18 +1474,18 @@ def push_to_ml(
     *,
     push_stock: bool = True,
     push_price: bool = True,
+    push_description: bool = False,
 ) -> tuple[bool, str]:
     """
-    Empuja stock_actual y/o precio_final del DB local a la publicación de ML.
-    Solo lo hace si write sync está habilitado (ML_SYNC_WRITE_ENABLED=true).
+    Empuja stock_actual y/o precio_final y/o descripcion del DB local a la
+    publicación de ML. Solo si write sync está habilitado.
 
     Devuelve (ok, mensaje).
       - ok=True si TODOS los pushes pedidos salieron bien
       - ok=False si alguno falló (mensaje describe cuál)
 
-    El cambio local NO se revierte si el push falla — la idea es que el
-    panel siempre refleje la intención del usuario, y el drift queda
-    visible para reintentar.
+    El cambio local NO se revierte si el push falla — el panel siempre
+    refleja la intención del usuario, y el drift queda visible.
     """
     from . import ml_client
 
@@ -1467,9 +1509,11 @@ def push_to_ml(
         actions.append("stock")
     if push_price and prod.precio_final is not None:
         actions.append("precio")
+    if push_description and (prod.descripcion or "").strip():
+        actions.append("descripcion")
 
     if not actions:
-        return False, "Nada para pushear (precio vacío o flags desactivados)"
+        return False, "Nada para pushear (sin precio, descripción vacía o flags desactivados)"
 
     msgs: list[str] = []
     errors: list[str] = []
@@ -1489,6 +1533,15 @@ def push_to_ml(
             msgs.append(f"precio=${prod.precio_final:,.0f}")
         except ml_client.MLClientError as e:
             errors.append(f"precio falló: {e}")
+
+    if "descripcion" in actions:
+        try:
+            ml_client.update_item_description(
+                db, prod.ml_item_id, (prod.descripcion or "").strip()
+            )
+            msgs.append("descripción")
+        except ml_client.MLClientError as e:
+            errors.append(f"descripción falló: {e}")
 
     if msgs:
         prod.ml_last_synced_at = datetime.now(timezone.utc)
@@ -1661,6 +1714,58 @@ def sync_producto_from_ml(
             if prod.ml_envio_fijo != Decimal("0"):
                 prod.ml_envio_fijo = Decimal("0")
                 hidratado.append("envío $0 (paga el comprador)")
+
+        # Descripción: endpoint separado en ML. Pull si la descripción local
+        # está vacía — preservamos manual edits.
+        if not (prod.descripcion or "").strip():
+            desc_data = ml_client.get_item_description(db, prod.ml_item_id)
+            desc_text = (desc_data.get("plain_text") or "").strip()
+            if desc_text:
+                # ML permite descripciones largas; cortamos a 50K para seguridad
+                prod.descripcion = desc_text[:50000]
+                hidratado.append("descripción")
+
+        # Atributos + sale_terms → ficha_tecnica (additive merge: solo agregamos
+        # claves que NO existan ya, así no pisamos ediciones manuales).
+        existing_ficha = dict(prod.ficha_tecnica or {})
+        nuevos_attrs = 0
+
+        for attr in (item.get("attributes") or []):
+            attr_id = attr.get("id") or ""
+            attr_name = attr.get("name") or attr_id
+            value = _attr_value_str(attr)
+            if not value:
+                continue
+            # Algunos atributos van a campos dedicados del producto
+            target_field = _ML_ATTR_TO_FIELD.get(attr_id)
+            if target_field == "marca" and not prod.marca:
+                prod.marca = value[:80]
+                hidratado.append("marca")
+                continue
+            # Resto va a la ficha técnica
+            key = _norm_attr_key(attr_name) or _norm_attr_key(attr_id)
+            if key and key not in existing_ficha:
+                existing_ficha[key] = value
+                nuevos_attrs += 1
+
+        for term in (item.get("sale_terms") or []):
+            term_id = term.get("id") or ""
+            term_name = term.get("name") or term_id
+            value = _attr_value_str(term)
+            if not value:
+                continue
+            key = _norm_attr_key(term_name) or _norm_attr_key(term_id)
+            if key and key not in existing_ficha:
+                existing_ficha[key] = value
+                nuevos_attrs += 1
+
+        if nuevos_attrs > 0:
+            # Asignación de dict nuevo (no mutación) para que SQLAlchemy
+            # detecte el cambio en el campo JSONB.
+            prod.ficha_tecnica = existing_ficha
+            hidratado.append(
+                f"{nuevos_attrs} atributo{'' if nuevos_attrs == 1 else 's'} en ficha"
+            )
 
         # Fotos: si no hay fotos en R2, descargar las de ML
         existing_photos = int(db.execute(

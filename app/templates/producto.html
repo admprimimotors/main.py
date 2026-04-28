@@ -655,10 +655,11 @@
 
   {% if ml_write_enabled %}
   <div class="alert alert-success" style="margin-top: 16px; margin-bottom: 0;">
-    <strong>Write sync activo:</strong> los cambios de stock que hagas con los botones
-    <strong>−</strong> / <strong>+</strong> / <strong>Guardar</strong> de arriba se pushean
-    automáticamente a la publicación de ML. Para pushear precio (o re-pushear todo manualmente),
-    usá el botón <strong>↑ Push a ML</strong>.
+    <strong>Write sync activo:</strong> los cambios de <strong>stock</strong> con los botones
+    <strong>−</strong> / <strong>+</strong> / <strong>Guardar</strong> y los cambios de
+    <strong>precio</strong> o <strong>descripción</strong> desde el form de editar se pushean
+    automáticamente a la publicación de ML. El botón <strong>↑ Push a ML</strong> hace push manual
+    de stock + precio + descripción en una sola acción.
   </div>
   {% else %}
   <div class="alert alert-warning" style="margin-top: 16px; margin-bottom: 0;">
