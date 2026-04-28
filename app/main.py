@@ -30,7 +30,7 @@ from . import auth, catalogo, database, ml_client, precios, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.17.0"
+APP_VERSION = "0.18.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -200,6 +200,7 @@ def catalogo_view(
     )
     categorias_disponibles = catalogo.list_categorias(db)
     marcas_disponibles = catalogo.list_marcas(db)
+    placeholders_pendientes = catalogo.count_placeholders_pendientes(db)
     flash = request.session.pop("flash", None)
     # Guardar la URL completa (con todos los filtros y paginación) para que
     # el detalle del producto tenga adónde volver. Sobrescribe en cada visita
@@ -224,6 +225,7 @@ def catalogo_view(
             "rentabilidad": rentabilidad,
             "categorias_disponibles": categorias_disponibles,
             "marcas_disponibles": marcas_disponibles,
+            "placeholders_pendientes": placeholders_pendientes,
         },
     )
 
@@ -540,69 +542,81 @@ def _resolver_skus_bulk(
     return [s for s in skus_form if s][:cap]
 
 
-@app.post("/catalogo/bulk/hidratar")
-def catalogo_bulk_hidratar(
+@app.post("/catalogo/bulk/hidratar-pendientes/batch")
+def catalogo_bulk_hidratar_batch(
     request: Request,
-    skus: list[str] = Form(default=[]),
-    modo: str = Form(default="seleccionados"),
-    filtro_q: str = Form(default=""),
-    filtro_vinculadas: str = Form(default=""),
-    filtro_categoria: str = Form(default=""),
-    filtro_marca: str = Form(default=""),
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
-    """Hidrata desde ML los SKUs seleccionados (capeado a HIDRATAR_CAP)."""
-    target_skus = _resolver_skus_bulk(
-        db,
-        skus_form=skus,
-        modo=modo,
-        cap=HIDRATAR_CAP,
-        only_linked=True,
-        filtro_q=filtro_q,
-        filtro_vinculadas=filtro_vinculadas,
-        filtro_categoria=filtro_categoria,
-        filtro_marca=filtro_marca,
-    )
+    """
+    Endpoint JSON que el frontend llama en loop para hidratar todos los placeholders.
+    Cada batch procesa hasta HIDRATAR_CAP productos y devuelve {processed, remaining, done}.
 
-    if not target_skus:
+    El JS del browser sigue llamando este endpoint hasta que `done=true`. Esto evita
+    el timeout de Render manteniendo cada request individual en ~25-75s.
+    """
+    try:
+        result = catalogo.hidratar_batch_placeholders(db, limit=HIDRATAR_CAP)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return JSONResponse(
+            {"processed": 0, "remaining": 0, "done": True,
+             "errors": [f"{type(e).__name__}: {e}"], "skus_done": []},
+            status_code=500,
+        )
+    return JSONResponse(result)
+
+
+@app.post("/catalogo/bulk/editar")
+def catalogo_bulk_editar(
+    request: Request,
+    skus: list[str] = Form(default=[]),
+    campo: str = Form(...),
+    valor: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Aplica un valor uniforme a un campo (categoria/marca/moneda/activo) sobre
+    los SKUs seleccionados.
+    """
+    try:
+        aplicados, errores = catalogo.bulk_edit_skus(db, skus, campo, valor)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
         request.session["flash"] = {
-            "type": "warning",
-            "msg": "Ningún SKU para hidratar (¿seleccionaste alguno con ML_Item_ID?).",
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
         }
         return RedirectResponse("/catalogo", status_code=303)
 
-    ok = 0
-    errores: list[str] = []
-    for sku in target_skus:
-        try:
-            success, msg = catalogo.sync_producto_from_ml(db, sku, hidratar=True)
-        except Exception as e:
-            success = False
-            msg = f"{type(e).__name__}: {e}"
-        if success:
-            ok += 1
-        else:
-            errores.append(f"{sku}: {msg}")
-
-    total = len(target_skus)
-    if ok == total:
-        msg = f"✓ {ok} hidratados (título, precio, categoría y fotos donde faltaban)."
-        flash_type = "success"
-    elif ok:
-        msg = (
-            f"{ok}/{total} hidratados · {len(errores)} con error: "
-            + " · ".join(errores[:3])
-        )
-        flash_type = "warning"
+    if errores and not aplicados:
+        request.session["flash"] = {"type": "error", "msg": " · ".join(errores[:3])}
+    elif errores:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": (
+                f"{aplicados} actualizados · {len(errores)} errores: "
+                + " · ".join(errores[:3])
+            ),
+        }
     else:
-        msg = "Ninguno se hidrató: " + " · ".join(errores[:3])
-        flash_type = "error"
+        valor_display = valor if valor else "(vacío)"
+        request.session["flash"] = {
+            "type": "success",
+            "msg": f"✓ {aplicados} producto{'' if aplicados == 1 else 's'} actualizado{'' if aplicados == 1 else 's'} · {campo} = {valor_display}",
+        }
 
-    if total == HIDRATAR_CAP and modo == "matching":
-        msg += f" · Hay más placeholders pendientes — repetí el botón hasta que la cuenta sea 0."
-
-    request.session["flash"] = {"type": flash_type, "msg": msg}
     return RedirectResponse("/catalogo", status_code=303)
 
 

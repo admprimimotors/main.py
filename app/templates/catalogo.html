@@ -239,12 +239,128 @@
         <button type="submit" class="btn">↻ Sync 50 más antiguos desde ML</button>
       </form>
       <span style="font-size: 12px; color: var(--muted);">
-        Trae precio/stock/status reales de ML para los productos vinculados.
-        Procesa los 50 con sync más antiguo (o sin sync nunca). Repetí hasta que todo esté al día.
+        Trae precio/stock/status reales de ML (sin descargar fotos ni hidratar).
+        Procesa los 50 con sync más antiguo. Repetí hasta que todo esté al día.
       </span>
     </div>
   </div>
+
+  {# Auto-hidratación con loop client-side — botón único que procesa todos los pendientes #}
+  <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft);">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <button type="button" class="btn" id="btn-auto-hidratar"
+              {% if placeholders_pendientes == 0 %}disabled{% endif %}>
+        ✨ Hidratar todos los placeholders pendientes
+        <span id="pendientes-count" style="margin-left: 6px; opacity: 0.85;">
+          ({{ placeholders_pendientes }})
+        </span>
+      </button>
+      <span style="font-size: 12px; color: var(--muted);">
+        Loop automático: trae título, precio, categoría y fotos para todos los productos vinculados a ML
+        que tengan algún dato faltante. Procesa de a 5 hasta terminar — puede tardar varios minutos.
+        No cierres la pestaña hasta que termine.
+      </span>
+    </div>
+
+    {# Banner de progreso (oculto hasta que se inicie el loop) #}
+    <div id="auto-hidratar-banner" style="display: none; margin-top: 14px; padding: 14px 16px;
+         border-radius: 8px; border: 1px solid rgba(59,130,246,.40);
+         background: rgba(59,130,246,.10); font-size: 13px; line-height: 1.6;">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 14px; height: 14px; border-radius: 50%;
+                    border: 2px solid #93c5fd; border-top-color: transparent;
+                    animation: spin 0.8s linear infinite;" id="spinner"></div>
+        <strong id="auto-hidratar-status" style="color: #93c5fd;">Iniciando…</strong>
+      </div>
+      <div id="auto-hidratar-progress-bar"
+           style="margin-top: 10px; background: rgba(0,0,0,.3); height: 6px; border-radius: 3px; overflow: hidden;">
+        <div id="auto-hidratar-progress-fill"
+             style="height: 100%; width: 0%; background: #93c5fd; transition: width .3s;"></div>
+      </div>
+      <div id="auto-hidratar-detail" style="margin-top: 8px; color: var(--muted); font-size: 12px;"></div>
+    </div>
+  </div>
 </div>
+
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<script>
+(function() {
+  const btn = document.getElementById('btn-auto-hidratar');
+  const banner = document.getElementById('auto-hidratar-banner');
+  const status = document.getElementById('auto-hidratar-status');
+  const detail = document.getElementById('auto-hidratar-detail');
+  const fill = document.getElementById('auto-hidratar-progress-fill');
+  const spinner = document.getElementById('spinner');
+  const totalInicial = {{ placeholders_pendientes }};
+
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    if (!confirm(`Iniciar hidratación automática de ${totalInicial} placeholder${totalInicial === 1 ? '' : 's'}?\n\nProcesa de a 5 por iteración. Puede tardar varios minutos. No cierres la pestaña.`)) {
+      return;
+    }
+
+    btn.disabled = true;
+    banner.style.display = 'block';
+    status.textContent = 'Iniciando…';
+
+    let totalProcesados = 0;
+    let totalErrores = 0;
+    const erroresAcum = [];
+    let safetyCounter = 0;
+    const MAX_ITERS = 500;  // safety cap (5 × 500 = 2500 procesados, suficiente)
+
+    while (safetyCounter < MAX_ITERS) {
+      safetyCounter++;
+      try {
+        const resp = await fetch('/catalogo/bulk/hidratar-pendientes/batch', {method: 'POST'});
+        if (!resp.ok) {
+          status.textContent = `❌ Error HTTP ${resp.status} — abortando`;
+          status.style.color = '#fca5a5';
+          spinner.style.display = 'none';
+          break;
+        }
+        const data = await resp.json();
+        totalProcesados += data.processed;
+        totalErrores += (data.errors || []).length;
+        if (data.errors && data.errors.length) erroresAcum.push(...data.errors);
+
+        const restantes = data.remaining;
+        const totalEstimado = totalProcesados + restantes;
+        const pct = totalEstimado > 0 ? (totalProcesados / totalEstimado * 100) : 100;
+        fill.style.width = pct.toFixed(1) + '%';
+        status.textContent = `Procesados ${totalProcesados} · Restan ${restantes}`;
+        if (data.skus_done && data.skus_done.length) {
+          detail.textContent = `Última tanda: ${data.skus_done.join(', ')}`;
+        }
+
+        if (data.done || data.processed === 0) {
+          status.textContent = `✓ Completado: ${totalProcesados} hidratados${totalErrores ? `, ${totalErrores} con error` : ''}`;
+          status.style.color = totalErrores ? '#fcd34d' : '#86efac';
+          spinner.style.display = 'none';
+          fill.style.width = '100%';
+          fill.style.background = totalErrores ? '#fcd34d' : '#86efac';
+          if (erroresAcum.length) {
+            detail.textContent = 'Errores (primeros 5): ' + erroresAcum.slice(0, 5).join(' · ');
+          } else {
+            detail.textContent = 'Recargando página en 3 segundos…';
+          }
+          setTimeout(() => location.reload(), 3000);
+          break;
+        }
+      } catch (e) {
+        status.textContent = `❌ Error de red: ${e.message} — abortando`;
+        status.style.color = '#fca5a5';
+        spinner.style.display = 'none';
+        break;
+      }
+    }
+  });
+})();
+</script>
 
 <form method="get" action="/catalogo" class="filter-form">
   <input type="search" name="q" value="{{ search }}"
@@ -295,24 +411,31 @@
     <div class="divider"></div>
 
     <span class="group-label">Seleccionados</span>
-    <button type="submit" formaction="/catalogo/bulk/hidratar" name="modo" value="seleccionados"
-            id="btn-hid-sel" disabled
-            onclick="return confirm('Hidratar los seleccionados desde ML? Trae título, precio, categoría y fotos para los que estén vacíos. Procesa hasta 5 por click.');">
-      ↓ Hidratar (max 5)
-    </button>
     <button type="submit" formaction="/catalogo/bulk/push" name="modo" value="seleccionados"
             id="btn-push-sel" disabled
             onclick="return confirm('Pushear stock + precio del DB local a las publicaciones de ML seleccionadas? Procesa hasta 50 por click.');">
       ↑ Push a ML (max 50)
     </button>
 
+    {# Bulk edit inline: dropdown del campo + input del valor + apply #}
+    <select name="campo" id="bulk-edit-campo" class="filter-select" style="min-width: 120px;">
+      <option value="categoria">Categoría</option>
+      <option value="marca">Marca</option>
+      <option value="moneda">Moneda</option>
+      <option value="activo">Estado</option>
+    </select>
+    <input type="text" name="valor" id="bulk-edit-valor"
+           placeholder="Nuevo valor"
+           class="filter-select" style="min-width: 140px;" />
+    <button type="submit" formaction="/catalogo/bulk/editar"
+            id="btn-edit-sel" disabled
+            onclick="return confirmBulkEdit();">
+      ✎ Aplicar a seleccionados
+    </button>
+
     <div class="divider"></div>
 
-    <span class="group-label">Que matchean filtros</span>
-    <button type="submit" formaction="/catalogo/bulk/hidratar" name="modo" value="matching"
-            onclick="return confirm('Hidratar los 5 más antiguos que matchean los filtros activos?');">
-      ↓ Hidratar 5 más antiguos
-    </button>
+    <span class="group-label">Matchean filtros</span>
     <button type="submit" formaction="/catalogo/bulk/push" name="modo" value="matching"
             onclick="return confirm('Pushear los 50 más antiguos que matchean los filtros activos?');">
       ↑ Push 50 más antiguos
@@ -398,15 +521,14 @@
   const selectAll = document.getElementById('select-all-visible');
   const rowChecks = document.querySelectorAll('.row-check');
   const counter = document.getElementById('sel-count');
-  const btnHidSel = document.getElementById('btn-hid-sel');
   const btnPushSel = document.getElementById('btn-push-sel');
+  const btnEditSel = document.getElementById('btn-edit-sel');
 
   function update() {
     const n = document.querySelectorAll('.row-check:checked').length;
     counter.textContent = n;
-    btnHidSel.disabled = (n === 0);
-    btnPushSel.disabled = (n === 0);
-    // sincronizar el "select all visible" si están todos
+    if (btnPushSel) btnPushSel.disabled = (n === 0);
+    if (btnEditSel) btnEditSel.disabled = (n === 0);
     if (rowChecks.length > 0) {
       selectAll.checked = (n === rowChecks.length);
       selectAll.indeterminate = (n > 0 && n < rowChecks.length);
@@ -421,6 +543,26 @@
 
   update();
 })();
+
+// Confirmación específica para bulk edit con preview de qué se va a aplicar
+function confirmBulkEdit() {
+  const n = document.querySelectorAll('.row-check:checked').length;
+  if (n === 0) return false;
+  const campo = document.getElementById('bulk-edit-campo').value;
+  const valor = document.getElementById('bulk-edit-valor').value.trim();
+  const labelMap = {
+    categoria: 'Categoría',
+    marca: 'Marca',
+    moneda: 'Moneda (ARS o USD)',
+    activo: 'Estado (si/no)',
+  };
+  const valorMostrar = valor || '(vacío → limpia el campo)';
+  return confirm(
+    `Aplicar "${labelMap[campo]}" = ${valorMostrar} a ${n} producto${n === 1 ? '' : 's'}?\n\n` +
+    `Esta acción modifica el campo en TODOS los seleccionados, ` +
+    `pisando los valores actuales.`
+  );
+}
 </script>
 
 {% set total_pages = ((total + page_size - 1) // page_size) if total > 0 else 1 %}

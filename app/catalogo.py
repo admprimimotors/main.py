@@ -1175,6 +1175,143 @@ def generate_ml_link_template() -> bytes:
 # Sync desde ML (read-only)
 # =============================================================
 
+def _q_placeholders_pendientes(db: Session):
+    """
+    Sub-query: productos con ML link pero al menos un dato por hidratar.
+    Criterios de "pendiente":
+      - titulo igual al sku (placeholder de linkeo)
+      - precio_final NULL
+      - categoria NULL
+      - sin fotos en DB
+    Cualquiera de las 4 lo marca como pendiente.
+    """
+    # Productos que SÍ tienen fotos
+    con_fotos = select(FotoProducto.producto_id).distinct()
+
+    return (
+        select(Producto)
+        .where(Producto.ml_item_id.is_not(None))
+        .where(
+            or_(
+                Producto.titulo == Producto.sku,
+                Producto.precio_final.is_(None),
+                Producto.categoria.is_(None),
+                ~Producto.id.in_(con_fotos),
+            )
+        )
+    )
+
+
+def count_placeholders_pendientes(db: Session) -> int:
+    """Cuántos productos tienen al menos un dato por hidratar."""
+    base = _q_placeholders_pendientes(db).subquery()
+    return int(db.execute(
+        select(sql_func.count()).select_from(base)
+    ).scalar() or 0)
+
+
+def hidratar_batch_placeholders(db: Session, limit: int = 5) -> dict:
+    """
+    Hidrata los próximos N placeholders pendientes (los más antiguos primero).
+    Devuelve dict con conteos para que el frontend pueda hacer loop:
+      - processed: cantidad hidratada en este batch
+      - remaining: cuántos quedan pendientes después
+      - done: True si no quedan más
+      - errors: lista de errores (sku: msg)
+      - skus_done: lista de SKUs procesados (para mostrar en UI)
+    """
+    q = (
+        _q_placeholders_pendientes(db)
+        .order_by(Producto.ml_last_synced_at.asc().nulls_first())
+        .limit(limit)
+    )
+    skus = [p.sku for p in db.execute(q).scalars().all()]
+
+    if not skus:
+        return {
+            "processed": 0,
+            "remaining": 0,
+            "done": True,
+            "errors": [],
+            "skus_done": [],
+        }
+
+    processed = 0
+    errors: list[str] = []
+    skus_done: list[str] = []
+    for sku in skus:
+        try:
+            ok, msg = sync_producto_from_ml(db, sku, hidratar=True)
+        except Exception as e:
+            ok = False
+            msg = f"{type(e).__name__}: {e}"
+        if ok:
+            processed += 1
+            skus_done.append(sku)
+        else:
+            errors.append(f"{sku}: {msg}")
+
+    remaining = count_placeholders_pendientes(db)
+    return {
+        "processed": processed,
+        "remaining": remaining,
+        "done": remaining == 0,
+        "errors": errors,
+        "skus_done": skus_done,
+    }
+
+
+def bulk_edit_skus(
+    db: Session,
+    skus: list[str],
+    campo: str,
+    valor: Any,
+) -> tuple[int, list[str]]:
+    """
+    Aplica un mismo valor a un campo de N productos seleccionados.
+    Campos permitidos: categoria, marca, moneda, activo.
+
+    Devuelve (cantidad_aplicada, lista_de_errores).
+    """
+    ALLOWED = {"categoria", "marca", "moneda", "activo"}
+    if campo not in ALLOWED:
+        return 0, [f"Campo '{campo}' no permitido para bulk edit (permitidos: {', '.join(sorted(ALLOWED))})"]
+
+    if not skus:
+        return 0, ["No hay SKUs seleccionados"]
+
+    # Normalizar valor según campo
+    if campo == "activo":
+        if isinstance(valor, bool):
+            valor_final = valor
+        else:
+            valor_final = str(valor or "").strip().lower() in ("on", "true", "1", "yes", "si", "sí")
+    elif campo == "moneda":
+        v = str(valor or "").strip().upper()
+        if v not in ("ARS", "USD"):
+            return 0, [f"Moneda inválida: '{v}'. Usá ARS o USD."]
+        valor_final = v
+    else:
+        # categoria / marca → string o None si vacío
+        v = str(valor or "").strip()
+        valor_final = v[:80] if v else None
+
+    aplicados = 0
+    errores: list[str] = []
+    for sku in skus:
+        prod = db.execute(
+            select(Producto).where(Producto.sku == sku)
+        ).scalar_one_or_none()
+        if prod is None:
+            errores.append(f"SKU '{sku}' no existe")
+            continue
+        setattr(prod, campo, valor_final)
+        aplicados += 1
+
+    db.commit()
+    return aplicados, errores
+
+
 def bulk_sync_oldest(db: Session, limit: int = 50) -> tuple[int, int, list[str]]:
     """
     Sincroniza los N productos vinculados con sync más antiguo (o nunca sync'd).
