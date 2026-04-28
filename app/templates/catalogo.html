@@ -407,7 +407,14 @@
   <input type="hidden" name="filtro_marca" value="{{ marca }}" />
 
   <div class="bulk-bar">
-    <span class="count"><strong id="sel-count">0</strong> seleccionado{{ '' }}{# placeholder #}</span>
+    <span class="count">
+      <strong id="sel-count">0</strong> seleccionado{{ '' }}
+      {# placeholder #}
+    </span>
+    <button type="button" id="btn-clear-sel"
+            style="background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 6px 10px; font-size: 11px; cursor: pointer;">
+      Limpiar
+    </button>
     <div class="divider"></div>
 
     <span class="group-label">Seleccionados</span>
@@ -518,29 +525,153 @@
 
 <script>
 (function() {
+  // ============================================================
+  // Selección persistente a través de paginación, vía localStorage.
+  // Cuando un SKU se chequea, se guarda. Al cambiar de página, los SKUs ya
+  // seleccionados (que no están visibles) se inyectan como hidden inputs en
+  // el form para que se envíen al hacer una acción bulk.
+  // Expira en 1 hora para no arrastrar selecciones viejas.
+  // ============================================================
+
+  const STORAGE_KEY = 'catalogo_selection_v1';
+  const STORAGE_EXPIRY_MS = 60 * 60 * 1000; // 1 hora
+
+  function loadSelection() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return new Set();
+      if (!parsed.t || (Date.now() - parsed.t) > STORAGE_EXPIRY_MS) {
+        // Expiró → limpiar y arrancar vacío
+        localStorage.removeItem(STORAGE_KEY);
+        return new Set();
+      }
+      return new Set(parsed.skus || []);
+    } catch { return new Set(); }
+  }
+
+  function saveSelection(setSkus) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        t: Date.now(),
+        skus: Array.from(setSkus),
+      }));
+    } catch {}
+  }
+
+  function clearSelection() {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+
+  // ============================================================
+  // Wiring del form
+  // ============================================================
+
+  const form = document.getElementById('bulk-form');
   const selectAll = document.getElementById('select-all-visible');
   const rowChecks = document.querySelectorAll('.row-check');
   const counter = document.getElementById('sel-count');
   const btnPushSel = document.getElementById('btn-push-sel');
   const btnEditSel = document.getElementById('btn-edit-sel');
 
+  // Container para los hidden inputs de SKUs seleccionados que NO están visibles
+  // en esta página (para que el form los envíe igual).
+  let offpageContainer = document.getElementById('offpage-skus');
+  if (!offpageContainer) {
+    offpageContainer = document.createElement('div');
+    offpageContainer.id = 'offpage-skus';
+    offpageContainer.style.display = 'none';
+    form.appendChild(offpageContainer);
+  }
+
+  // Set de SKUs visibles en esta página
+  const visibleSkus = new Set();
+  rowChecks.forEach(cb => visibleSkus.add(cb.value));
+
+  // Current selection (entre todas las páginas)
+  let selection = loadSelection();
+
+  // Restaurar checkboxes para los SKUs visibles que estaban seleccionados
+  rowChecks.forEach(cb => {
+    if (selection.has(cb.value)) cb.checked = true;
+  });
+
+  function rebuildOffpageHiddens() {
+    // Limpia y re-arma los hidden inputs para SKUs seleccionados pero no visibles
+    offpageContainer.innerHTML = '';
+    selection.forEach(sku => {
+      if (!visibleSkus.has(sku)) {
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'skus';
+        hidden.value = sku;
+        offpageContainer.appendChild(hidden);
+      }
+    });
+  }
+
   function update() {
-    const n = document.querySelectorAll('.row-check:checked').length;
-    counter.textContent = n;
-    if (btnPushSel) btnPushSel.disabled = (n === 0);
-    if (btnEditSel) btnEditSel.disabled = (n === 0);
+    const totalSelected = selection.size;
+    counter.textContent = totalSelected;
+    if (btnPushSel) btnPushSel.disabled = (totalSelected === 0);
+    if (btnEditSel) btnEditSel.disabled = (totalSelected === 0);
+
+    // Sync el "select all visible" con el estado de la página actual
+    const visibleSelectedCount = document.querySelectorAll('.row-check:checked').length;
     if (rowChecks.length > 0) {
-      selectAll.checked = (n === rowChecks.length);
-      selectAll.indeterminate = (n > 0 && n < rowChecks.length);
+      selectAll.checked = (visibleSelectedCount === rowChecks.length);
+      selectAll.indeterminate = (visibleSelectedCount > 0 && visibleSelectedCount < rowChecks.length);
     }
   }
 
+  // Click sobre un checkbox individual: actualizar selection
+  rowChecks.forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) selection.add(cb.value);
+      else selection.delete(cb.value);
+      saveSelection(selection);
+      rebuildOffpageHiddens();
+      update();
+    });
+  });
+
+  // Click "select all visible": agregar/sacar todos los de la página actual
   selectAll.addEventListener('change', () => {
-    rowChecks.forEach(cb => { cb.checked = selectAll.checked; });
+    rowChecks.forEach(cb => {
+      cb.checked = selectAll.checked;
+      if (selectAll.checked) selection.add(cb.value);
+      else selection.delete(cb.value);
+    });
+    saveSelection(selection);
+    rebuildOffpageHiddens();
     update();
   });
-  rowChecks.forEach(cb => cb.addEventListener('change', update));
 
+  // Botón "Limpiar selección"
+  const btnClear = document.getElementById('btn-clear-sel');
+  if (btnClear) {
+    btnClear.addEventListener('click', () => {
+      selection.clear();
+      clearSelection();
+      rowChecks.forEach(cb => cb.checked = false);
+      rebuildOffpageHiddens();
+      update();
+    });
+  }
+
+  // Al hacer submit de una acción bulk (cualquier botón con formaction
+  // /catalogo/bulk/...), limpiar la selección DESPUÉS del envío para que la
+  // próxima visita arranque limpia.
+  form.addEventListener('submit', (e) => {
+    const action = (e.submitter && e.submitter.formAction) || '';
+    if (action.includes('/catalogo/bulk/')) {
+      // setTimeout para que el form tenga tiempo de enviar antes de limpiar
+      setTimeout(() => clearSelection(), 50);
+    }
+  });
+
+  rebuildOffpageHiddens();
   update();
 })();
 

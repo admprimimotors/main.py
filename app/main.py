@@ -202,10 +202,13 @@ def catalogo_view(
     marcas_disponibles = catalogo.list_marcas(db)
     placeholders_pendientes = catalogo.count_placeholders_pendientes(db)
     flash = request.session.pop("flash", None)
-    # Guardar la URL completa (con todos los filtros y paginación) para que
-    # el detalle del producto tenga adónde volver. Sobrescribe en cada visita
-    # a /catalogo, así siempre apunta a la última lista que el usuario miró.
-    request.session["last_catalogo_url"] = str(request.url)
+    # Guardar la URL relativa (path+query) para que el detalle del producto y
+    # los endpoints bulk tengan adónde volver. Path+query (no la URL absoluta)
+    # para que sirva como redirect target sin problemas de scheme/host.
+    relative_url = request.url.path
+    if request.url.query:
+        relative_url += "?" + request.url.query
+    request.session["last_catalogo_url"] = relative_url
     return templates.TemplateResponse(
         request,
         "catalogo.html",
@@ -511,6 +514,11 @@ HIDRATAR_CAP = 5     # cada hidratación toma 10-15s por las fotos
 PUSH_CAP = 50        # cada push es ~500ms
 
 
+def _back_to_catalogo(request: Request) -> str:
+    """Para endpoints bulk: volver a la última URL del catálogo (con filtros y página)."""
+    return request.session.get("last_catalogo_url") or "/catalogo"
+
+
 def _resolver_skus_bulk(
     db: DbSession,
     *,
@@ -598,7 +606,7 @@ def catalogo_bulk_editar(
             "type": "error",
             "msg": f"Error inesperado: {type(e).__name__}: {e}",
         }
-        return RedirectResponse("/catalogo", status_code=303)
+        return RedirectResponse(_back_to_catalogo(request), status_code=303)
 
     if errores and not aplicados:
         request.session["flash"] = {"type": "error", "msg": " · ".join(errores[:3])}
@@ -617,7 +625,7 @@ def catalogo_bulk_editar(
             "msg": f"✓ {aplicados} producto{'' if aplicados == 1 else 's'} actualizado{'' if aplicados == 1 else 's'} · {campo} = {valor_display}",
         }
 
-    return RedirectResponse("/catalogo", status_code=303)
+    return RedirectResponse(_back_to_catalogo(request), status_code=303)
 
 
 @app.post("/catalogo/bulk/push")
@@ -638,7 +646,7 @@ def catalogo_bulk_push(
             "type": "error",
             "msg": "Write sync deshabilitado. Seteá ML_SYNC_WRITE_ENABLED=true en Render.",
         }
-        return RedirectResponse("/catalogo", status_code=303)
+        return RedirectResponse(_back_to_catalogo(request), status_code=303)
 
     target_skus = _resolver_skus_bulk(
         db,
@@ -657,7 +665,7 @@ def catalogo_bulk_push(
             "type": "warning",
             "msg": "Ningún SKU para pushear.",
         }
-        return RedirectResponse("/catalogo", status_code=303)
+        return RedirectResponse(_back_to_catalogo(request), status_code=303)
 
     ok = 0
     errores: list[str] = []
@@ -692,7 +700,7 @@ def catalogo_bulk_push(
         msg += " · Quedan más para pushear — repetí el botón."
 
     request.session["flash"] = {"type": flash_type, "msg": msg}
-    return RedirectResponse("/catalogo", status_code=303)
+    return RedirectResponse(_back_to_catalogo(request), status_code=303)
 
 
 @app.post("/catalogo/ml-link/sync-batch")
@@ -720,7 +728,7 @@ def catalogo_ml_sync_batch(
             "type": "error",
             "msg": f"Error inesperado: {type(e).__name__}: {e}",
         }
-        return RedirectResponse("/catalogo", status_code=303)
+        return RedirectResponse(_back_to_catalogo(request), status_code=303)
 
     if total == 0:
         request.session["flash"] = {
@@ -744,7 +752,7 @@ def catalogo_ml_sync_batch(
             "msg": msg,
         }
 
-    return RedirectResponse("/catalogo", status_code=303)
+    return RedirectResponse(_back_to_catalogo(request), status_code=303)
 
 
 @app.get("/catalogo/ml-link/template")
