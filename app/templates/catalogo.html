@@ -180,6 +180,52 @@
   .renta-icon.ok { color: #86efac; }
   .renta-icon.unknown { color: var(--muted); }
 
+  /* Cards colapsables con <details> nativo */
+  details.collapsible-card {
+    margin-bottom: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  details.collapsible-card > summary {
+    padding: 14px 22px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background .12s;
+    user-select: none;
+  }
+  details.collapsible-card > summary:hover {
+    background: var(--panel-2);
+  }
+  details.collapsible-card > summary::-webkit-details-marker { display: none; }
+  details.collapsible-card > summary::marker { display: none; content: ""; }
+  details.collapsible-card > summary .summary-meta {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: normal; font-size: 12px; color: var(--muted);
+  }
+  details.collapsible-card > summary .caret {
+    color: var(--muted);
+    font-size: 12px;
+    transition: transform .2s;
+    margin-left: 10px;
+  }
+  details.collapsible-card[open] > summary .caret {
+    transform: rotate(180deg);
+  }
+  details.collapsible-card[open] > summary {
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .collapsible-body {
+    padding: 18px 22px 22px;
+  }
+
   .pagination {
     display: flex; align-items: center; justify-content: center;
     gap: 6px; margin-top: 22px;
@@ -204,23 +250,43 @@
   <p>{{ total }} producto{{ '' if total == 1 else 's' }} en la base. Subí el Excel master para sincronizar.</p>
 </div>
 
-<div class="card" style="margin-bottom: 22px;">
-  <div class="card-title">Importar / actualizar</div>
-  <form method="post" action="/catalogo/upload" enctype="multipart/form-data" class="upload-form">
-    <input type="file" name="archivo" accept=".xlsx,.xls" required />
-    <button type="submit" class="btn">Subir Excel</button>
-    <a href="/catalogo/template" class="btn btn-ghost">Descargar template</a>
-  </form>
-  <div class="help-text">
-    El Excel debe tener una hoja <code>Catalogo</code> (productos) y opcionalmente <code>Compatibilidades</code>.
-    Las columnas estándar (<code>SKU</code>, <code>Titulo</code>, <code>Precio_Final</code>, <code>Stock</code>, etc.) se mapean a los campos del producto;
-    cualquier columna extra (<code>Diametro_mm</code>, <code>Voltaje</code>, etc.) se guarda automáticamente en la ficha técnica.
-    Al subir, los SKUs existentes se <strong>actualizan</strong> y los nuevos se <strong>insertan</strong>.
+<details class="collapsible-card">
+  <summary>
+    <span>📋 Importar / actualizar Excel master</span>
+    <span class="summary-meta">
+      Subir catálogo + compatibilidades
+      <span class="caret">▾</span>
+    </span>
+  </summary>
+  <div class="collapsible-body">
+    <form method="post" action="/catalogo/upload" enctype="multipart/form-data" class="upload-form">
+      <input type="file" name="archivo" accept=".xlsx,.xls" required />
+      <button type="submit" class="btn">Subir Excel</button>
+      <a href="/catalogo/template" class="btn btn-ghost">Descargar template</a>
+    </form>
+    <div class="help-text">
+      El Excel debe tener una hoja <code>Catalogo</code> (productos) y opcionalmente <code>Compatibilidades</code>.
+      Las columnas estándar (<code>SKU</code>, <code>Titulo</code>, <code>Precio_Final</code>, <code>Stock</code>, etc.) se mapean a los campos del producto;
+      cualquier columna extra (<code>Diametro_mm</code>, <code>Voltaje</code>, etc.) se guarda automáticamente en la ficha técnica.
+      Al subir, los SKUs existentes se <strong>actualizan</strong> y los nuevos se <strong>insertan</strong>.
+    </div>
   </div>
-</div>
+</details>
 
-<div class="card" style="margin-bottom: 22px;">
-  <div class="card-title">Vincular SKUs con publicaciones de Mercado Libre</div>
+<details class="collapsible-card">
+  <summary>
+    <span>🔗 Vincular SKUs con Mercado Libre</span>
+    <span class="summary-meta">
+      Linkeo · Sync · Hidratar
+      {% if placeholders_pendientes > 0 %}
+      <span style="background: rgba(245,158,11,.18); color: #fcd34d; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;">
+        {{ placeholders_pendientes }} pendientes
+      </span>
+      {% endif %}
+      <span class="caret">▾</span>
+    </span>
+  </summary>
+  <div class="collapsible-body">
   <form method="post" action="/catalogo/ml-link/upload" enctype="multipart/form-data" class="upload-form">
     <input type="file" name="archivo" accept=".xlsx,.xls" required />
     <button type="submit" class="btn">Subir links ML</button>
@@ -280,7 +346,8 @@
       <div id="auto-hidratar-detail" style="margin-top: 8px; color: var(--muted); font-size: 12px;"></div>
     </div>
   </div>
-</div>
+  </div>{# /collapsible-body #}
+</details>
 
 <style>
 @keyframes spin { to { transform: rotate(360deg); } }
