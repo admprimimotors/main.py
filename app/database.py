@@ -134,6 +134,11 @@ def _apply_migrations() -> None:
         ADD COLUMN IF NOT EXISTS ml_envio_fijo NUMERIC(12, 2),
         ADD COLUMN IF NOT EXISTS ml_impuestos_pct NUMERIC(5, 2)
         """,
+        # v9 (2026-04-27): comisión real por producto, autocompleta vía API ML.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS ml_comision_pct NUMERIC(5, 2)
+        """,
     ]
     try:
         with engine.begin() as conn:

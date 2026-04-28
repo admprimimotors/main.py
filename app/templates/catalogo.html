@@ -171,6 +171,14 @@
     background: var(--panel-2); color: var(--muted);
     border: 1px dashed var(--border);
   }
+  .renta-icon {
+    display: inline-block;
+    font-size: 14px;
+    cursor: help;
+  }
+  .renta-icon.below { color: #fca5a5; }
+  .renta-icon.ok { color: #86efac; }
+  .renta-icon.unknown { color: var(--muted); }
 
   .pagination {
     display: flex; align-items: center; justify-content: center;
@@ -248,6 +256,12 @@
     <option value="no" {% if vinculadas == 'no' %}selected{% endif %}>ML: sin vincular</option>
   </select>
 
+  <select name="rentabilidad" class="filter-select">
+    <option value="" {% if not rentabilidad %}selected{% endif %}>Rentab: todas</option>
+    <option value="below" {% if rentabilidad == 'below' %}selected{% endif %}>⚠ Bajo el ideal</option>
+    <option value="ok" {% if rentabilidad == 'ok' %}selected{% endif %}>✓ OK / arriba del ideal</option>
+  </select>
+
   <select name="categoria" class="filter-select">
     <option value="">Categoría: todas</option>
     {% for cat in categorias_disponibles %}
@@ -263,7 +277,7 @@
   </select>
 
   <button type="submit" class="btn">Filtrar</button>
-  {% if search or vinculadas or categoria or marca %}
+  {% if search or vinculadas or categoria or marca or rentabilidad %}
   <a href="/catalogo" class="btn btn-ghost">Limpiar</a>
   {% endif %}
 </form>
@@ -320,6 +334,7 @@
           <th class="num">Stock</th>
           <th class="num">Compat.</th>
           <th>ML</th>
+          <th title="Rentabilidad ML">💰</th>
           <th>Estado</th>
         </tr>
       </thead>
@@ -353,6 +368,15 @@
               {% endif %}
             {% else %}
               <span class="ml-chip-empty">Sin vincular</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if p.below_ideal is none %}
+              <span class="renta-icon unknown" title="Falta precio costo o final para calcular rentabilidad">—</span>
+            {% elif p.below_ideal %}
+              <span class="renta-icon below" title="Precio publicado por debajo del ideal — entrar al detalle para ver el delta">⚠</span>
+            {% else %}
+              <span class="renta-icon ok" title="Precio por encima del ideal — rentabilidad OK">✓</span>
             {% endif %}
           </td>
           <td>
@@ -400,7 +424,7 @@
 </script>
 
 {% set total_pages = ((total + page_size - 1) // page_size) if total > 0 else 1 %}
-{% set filter_qs = 'q=' ~ (search|urlencode) ~ '&vinculadas=' ~ (vinculadas|urlencode) ~ '&categoria=' ~ (categoria|urlencode) ~ '&marca=' ~ (marca|urlencode) %}
+{% set filter_qs = 'q=' ~ (search|urlencode) ~ '&vinculadas=' ~ (vinculadas|urlencode) ~ '&categoria=' ~ (categoria|urlencode) ~ '&marca=' ~ (marca|urlencode) ~ '&rentabilidad=' ~ (rentabilidad|urlencode) %}
 {% if total_pages > 1 %}
 <div class="pagination">
   {% if page > 1 %}

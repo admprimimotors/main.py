@@ -625,9 +625,12 @@ def list_productos(
     vinculadas: str = "",   # "si" → solo con ml_item_id, "no" → solo sin, "" → todas
     categoria: str = "",
     marca: str = "",
+    rentabilidad: str = "", # "below" → solo bajo el ideal, "ok" → solo arriba, "" → todas
 ) -> tuple[list[dict], int]:
     """
-    Devuelve (productos, total). Cada producto incluye `compat_count`.
+    Devuelve (productos, total). Cada producto incluye `compat_count` y
+    `below_ideal` (boolean: True si precio_final < precio_ideal_ML).
+
     `total` es el total de productos que matchean los filtros (para paginación).
     """
     # Subquery: cuántas compatibilidades tiene cada producto
@@ -669,6 +672,37 @@ def list_productos(
     if marca:
         extra_conds.append(Producto.marca == marca)
 
+    # Filtro por rentabilidad ML: precio_final vs precio_ideal calculado en SQL
+    # Fórmula: precio_ideal = (costo*(1+obj/100) + COALESCE(envio, default_envio))
+    #                       / (1 - (com + cuotas + COALESCE(imp, default_imp))/100)
+    # con com = COALESCE(ml_comision_pct, default_com).
+    if rentabilidad in ("below", "ok"):
+        from . import precios as _precios
+        cfg = _precios.get_ml_fees_config()
+        margen_factor = (Decimal("1") + cfg["margen_objetivo_pct"] / Decimal("100"))
+        envio_default = cfg["envio_default"]
+        com_default = cfg["comision_pct"]
+        cuotas_pct = cfg["cuotas_pct"]
+        imp_default = cfg["impuestos_pct_default"]
+
+        # Precio ideal calculado en SQL (NUMERIC arithmetic en Postgres es exacto)
+        precio_ideal_sql = (
+            (Producto.precio_costo * margen_factor
+             + sql_func.coalesce(Producto.ml_envio_fijo, envio_default))
+            / (Decimal("1") - (
+                sql_func.coalesce(Producto.ml_comision_pct, com_default)
+                + cuotas_pct
+                + sql_func.coalesce(Producto.ml_impuestos_pct, imp_default)
+            ) / Decimal("100"))
+        )
+        extra_conds.append(Producto.precio_costo.is_not(None))
+        extra_conds.append(Producto.precio_final.is_not(None))
+        extra_conds.append(Producto.precio_costo > 0)
+        if rentabilidad == "below":
+            extra_conds.append(Producto.precio_final < precio_ideal_sql)
+        else:  # "ok"
+            extra_conds.append(Producto.precio_final >= precio_ideal_sql)
+
     for cond in extra_conds:
         base_q = base_q.where(cond)
         count_q = count_q.where(cond)
@@ -683,8 +717,23 @@ def list_productos(
         .offset((page - 1) * PAGE_SIZE)
     )
 
+    from . import precios as _precios
+
     productos: list[dict] = []
     for prod, compat_count in db.execute(base_q).all():
+        # Computar rentabilidad para mostrar el indicador en la lista.
+        # Solo si hay precio_costo y precio_final, sino no hay nada que comparar.
+        below_ideal: Optional[bool] = None
+        if prod.precio_costo is not None and prod.precio_final is not None and prod.precio_costo > 0:
+            r = _precios.analyze_rentabilidad_ml(
+                precio_costo=prod.precio_costo,
+                precio_final=prod.precio_final,
+                envio_fijo_producto=prod.ml_envio_fijo,
+                impuestos_pct_producto=prod.ml_impuestos_pct,
+                comision_pct_producto=prod.ml_comision_pct,
+            )
+            if r.precio_ideal is not None:
+                below_ideal = bool(prod.precio_final < r.precio_ideal)
         productos.append({
             "id": prod.id,
             "sku": prod.sku,
@@ -697,6 +746,7 @@ def list_productos(
             "compat_count": int(compat_count or 0),
             "ml_item_id": prod.ml_item_id,
             "ml_permalink": prod.ml_permalink,
+            "below_ideal": below_ideal,
         })
     return productos, total
 
@@ -769,6 +819,7 @@ def get_producto_detail(db: Session, sku: str) -> Optional[dict]:
         "ml_last_synced_at": prod.ml_last_synced_at,
         "ml_envio_fijo": prod.ml_envio_fijo,
         "ml_impuestos_pct": prod.ml_impuestos_pct,
+        "ml_comision_pct": prod.ml_comision_pct,
         "created_at": prod.created_at,
         "updated_at": prod.updated_at,
         "compatibilidades": compats,
@@ -1436,6 +1487,43 @@ def sync_producto_from_ml(
             if cat_name:
                 prod.categoria = str(cat_name)[:80]
                 hidratado.append("categoría")
+
+        # Comisión ML real: usar /sites/MLA/listing_prices con la categoría +
+        # listing_type_id del item para obtener el sale_fee_amount exacto.
+        # Convertimos a % efectivo y guardamos. Sobrescribimos siempre (la
+        # comisión cambia con cambios de tarifa de ML, queremos data fresca).
+        if (
+            item.get("category_id")
+            and item.get("listing_type_id")
+            and ml_price_decimal is not None
+            and ml_price_decimal > 0
+        ):
+            lp = ml_client.get_listing_prices(
+                db,
+                price=float(ml_price_decimal),
+                category_id=item["category_id"],
+                listing_type_id=item["listing_type_id"],
+            )
+            sale_fee = lp.get("sale_fee_amount")
+            if sale_fee is not None:
+                try:
+                    com_pct = (
+                        Decimal(str(sale_fee)) / ml_price_decimal * Decimal("100")
+                    ).quantize(Decimal("0.01"))
+                    if prod.ml_comision_pct != com_pct:
+                        prod.ml_comision_pct = com_pct
+                        hidratado.append(f"comisión {com_pct}%")
+                except Exception:
+                    pass
+
+        # Envío: si la publicación NO tiene free_shipping, el seller no paga
+        # envío → ml_envio_fijo = 0. Si tiene free_shipping, ML no expone el
+        # costo seller en una API limpia, lo dejamos como está (manual).
+        shipping_info = item.get("shipping") or {}
+        if shipping_info.get("free_shipping") is False:
+            if prod.ml_envio_fijo != Decimal("0"):
+                prod.ml_envio_fijo = Decimal("0")
+                hidratado.append("envío $0 (paga el comprador)")
 
         # Fotos: si no hay fotos en R2, descargar las de ML
         existing_photos = int(db.execute(

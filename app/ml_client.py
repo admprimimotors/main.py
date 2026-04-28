@@ -262,6 +262,39 @@ def get_category(db: Session, category_id: str) -> dict:
     return info
 
 
+def get_listing_prices(
+    db: Session,
+    *,
+    price: float,
+    category_id: str,
+    listing_type_id: str = "gold_special",
+    site_id: str = "MLA",
+) -> dict:
+    """
+    Trae el detalle de fees para una publicación dada price + categoría + tipo.
+    Endpoint público de ML: /sites/{SITE}/listing_prices
+
+    Respuesta incluye `sale_fee_amount` (la comisión que ML cobra), que dividido
+    por price da la comisión efectiva en %.
+
+    Devuelve {} si falla — no levanta para no romper el sync.
+    """
+    if not category_id or price is None or price <= 0:
+        return {}
+    try:
+        return _get(
+            db,
+            f"/sites/{site_id}/listing_prices",
+            params={
+                "price": str(price),
+                "category_id": category_id,
+                "listing_type_id": listing_type_id,
+            },
+        )
+    except MLClientError:
+        return {}
+
+
 # =============================================================
 # Escrituras (write) — gateadas por is_write_enabled()
 # =============================================================

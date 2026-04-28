@@ -72,6 +72,10 @@
 
 <div class="breadcrumb">
   <a href="/catalogo/{{ producto.sku|urlencode }}">← Volver al detalle</a>
+  {% if back_url and back_url != '/catalogo' %}
+  <span style="color: var(--muted); margin: 0 8px;">·</span>
+  <a href="{{ back_url }}" style="color: var(--muted-strong);">← Catálogo</a>
+  {% endif %}
 </div>
 
 <div class="page-intro">

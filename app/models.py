@@ -115,6 +115,9 @@ class Producto(Base):
     # Si están en NULL, se usa el default global del módulo Precios.
     ml_envio_fijo: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     ml_impuestos_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    # Comisión real ML para esta publicación (varía por categoría + tipo).
+    # Se autocompleta al sincronizar con ML via /sites/MLA/listing_prices.
+    ml_comision_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
 
     # Auditoría
     created_at: Mapped[datetime] = mapped_column(

@@ -530,6 +530,7 @@ def analyze_rentabilidad_ml(
     precio_final: Optional[Decimal],
     envio_fijo_producto: Optional[Decimal] = None,
     impuestos_pct_producto: Optional[Decimal] = None,
+    comision_pct_producto: Optional[Decimal] = None,
 ) -> RentabilidadML:
     """
     Calcula precio ideal + margen neto real para un producto.
@@ -537,20 +538,26 @@ def analyze_rentabilidad_ml(
     Si falta precio_costo no se puede computar nada — devuelve un objeto con
     `computable=False`.
 
-    `envio_fijo_producto` y `impuestos_pct_producto` son los overrides por
-    producto. Si están en None, usa los defaults globales.
+    Los _producto args son overrides por producto. Si están en None, usa los
+    defaults globales. La comisión real se autocompleta al sincronizar con ML.
     """
     cfg = get_ml_fees_config()
     envio = _resolver_envio(envio_fijo_producto, cfg)
     impuestos_pct = _resolver_impuestos(impuestos_pct_producto, cfg)
-    fees_pct_total = _fees_pct_total(impuestos_pct, cfg)
+    # Comisión: producto > global default
+    comision_pct = (
+        comision_pct_producto
+        if comision_pct_producto is not None
+        else cfg["comision_pct"]
+    )
+    fees_pct_total = comision_pct + cfg["cuotas_pct"] + impuestos_pct
 
     result = RentabilidadML(
         precio_costo=precio_costo,
         precio_final=precio_final,
         envio_fijo=envio,
         impuestos_pct=impuestos_pct,
-        comision_pct=cfg["comision_pct"],
+        comision_pct=comision_pct,
         cuotas_pct=cfg["cuotas_pct"],
         margen_objetivo_pct=cfg["margen_objetivo_pct"],
         fees_pct_total=fees_pct_total,
@@ -572,7 +579,7 @@ def analyze_rentabilidad_ml(
 
     # Si hay precio_final cargado, computamos también el margen neto real
     if precio_final is not None:
-        result.fee_comision = (precio_final * cfg["comision_pct"] / Decimal("100")).quantize(
+        result.fee_comision = (precio_final * comision_pct / Decimal("100")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
         result.fee_cuotas = (precio_final * cfg["cuotas_pct"] / Decimal("100")).quantize(

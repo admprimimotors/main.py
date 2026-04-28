@@ -30,7 +30,7 @@ from . import auth, catalogo, database, ml_client, precios, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.16.0"
+APP_VERSION = "0.17.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -186,6 +186,7 @@ def catalogo_view(
     vinculadas: str = "",
     categoria: str = "",
     marca: str = "",
+    rentabilidad: str = "",
 ):
     """Listado paginado de productos con buscador y filtros."""
     productos, total = catalogo.list_productos(
@@ -195,10 +196,15 @@ def catalogo_view(
         vinculadas=vinculadas,
         categoria=categoria,
         marca=marca,
+        rentabilidad=rentabilidad,
     )
     categorias_disponibles = catalogo.list_categorias(db)
     marcas_disponibles = catalogo.list_marcas(db)
     flash = request.session.pop("flash", None)
+    # Guardar la URL completa (con todos los filtros y paginación) para que
+    # el detalle del producto tenga adónde volver. Sobrescribe en cada visita
+    # a /catalogo, así siempre apunta a la última lista que el usuario miró.
+    request.session["last_catalogo_url"] = str(request.url)
     return templates.TemplateResponse(
         request,
         "catalogo.html",
@@ -215,6 +221,7 @@ def catalogo_view(
             "vinculadas": vinculadas,
             "categoria": categoria,
             "marca": marca,
+            "rentabilidad": rentabilidad,
             "categorias_disponibles": categorias_disponibles,
             "marcas_disponibles": marcas_disponibles,
         },
@@ -318,7 +325,9 @@ def catalogo_detail(
         precio_final=detail["precio_final"],
         envio_fijo_producto=detail.get("ml_envio_fijo"),
         impuestos_pct_producto=detail.get("ml_impuestos_pct"),
+        comision_pct_producto=detail.get("ml_comision_pct"),
     )
+    back_url = request.session.get("last_catalogo_url") or "/catalogo"
     return templates.TemplateResponse(
         request,
         "producto.html",
@@ -332,6 +341,7 @@ def catalogo_detail(
             "ml_configured": ml_client.is_configured(),
             "ml_write_enabled": ml_client.is_write_enabled(),
             "rentabilidad": rentabilidad,
+            "back_url": back_url,
         },
     )
 
@@ -927,6 +937,7 @@ def catalogo_editar_form(
             "categorias_disponibles": catalogo.list_categorias(db),
             "marcas_disponibles": catalogo.list_marcas(db),
             "ml_write_enabled": ml_client.is_write_enabled(),
+            "back_url": request.session.get("last_catalogo_url") or "/catalogo",
         },
     )
 
