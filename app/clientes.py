@@ -39,6 +39,35 @@ CONDICIONES_IVA = [
     "Sujeto No Categorizado",
 ]
 
+# Las 24 jurisdicciones argentinas (23 provincias + CABA), orden alfabético.
+# Mantenida como constante para evitar typos al cargar clientes.
+PROVINCIAS_AR = [
+    "Buenos Aires",
+    "Catamarca",
+    "Chaco",
+    "Chubut",
+    "Ciudad Autónoma de Buenos Aires",
+    "Córdoba",
+    "Corrientes",
+    "Entre Ríos",
+    "Formosa",
+    "Jujuy",
+    "La Pampa",
+    "La Rioja",
+    "Mendoza",
+    "Misiones",
+    "Neuquén",
+    "Río Negro",
+    "Salta",
+    "San Juan",
+    "San Luis",
+    "Santa Cruz",
+    "Santa Fe",
+    "Santiago del Estero",
+    "Tierra del Fuego",
+    "Tucumán",
+]
+
 
 # =============================================================
 # Helpers
@@ -271,6 +300,25 @@ def reactivar_cliente(db: Session, cliente_id: int) -> tuple[bool, str]:
     cli.activo = True
     db.commit()
     return True, f"✓ Cliente '{cli.razon_social}' reactivado"
+
+
+def eliminar_cliente(db: Session, cliente_id: int) -> tuple[bool, str]:
+    """
+    Borra DEFINITIVAMENTE un cliente de la DB. NO es reversible.
+    A diferencia de archivar (soft delete que solo flippea activo=False),
+    este DELETE saca el row de la tabla.
+
+    En el futuro, cuando existan remitos/notas_credito linkeados con FK al
+    cliente, esta función va a tener que primero validar que no existen
+    documentos asociados (o cascadear, según política).
+    """
+    cli = get_cliente(db, cliente_id)
+    if cli is None:
+        return False, f"No existe el cliente ID {cliente_id}"
+    razon = cli.razon_social
+    db.delete(cli)
+    db.commit()
+    return True, f"✓ Cliente '{razon}' eliminado definitivamente"
 
 
 # =============================================================

@@ -149,28 +149,6 @@
   <a href="/clientes/nuevo" class="btn">+ Nuevo cliente</a>
 </div>
 
-<details class="collapsible-card">
-  <summary>
-    <span>📋 Importar masivo desde Excel</span>
-    <span class="summary-meta">
-      Compatible con CSV viejo
-      <span class="caret">▾</span>
-    </span>
-  </summary>
-  <div class="collapsible-body">
-    <form method="post" action="/clientes/upload" enctype="multipart/form-data" class="upload-form">
-      <input type="file" name="archivo" accept=".xlsx,.xls" required />
-      <button type="submit" class="btn">Subir Excel</button>
-      <a href="/clientes/template" class="btn btn-ghost">Descargar template</a>
-    </form>
-    <div class="help-text">
-      Excel con columnas <code>razon_social</code> + opcionales (<code>cuit_dni</code>, <code>email</code>, <code>telefono</code>, <code>direccion</code>, etc.).
-      <strong>Compatible con tu CSV viejo</strong>: si las columnas se llaman <code>NOMBRE</code>, <code>DIRECCION</code>, <code>PROVINCIA_CP</code>, <code>TELEFONO</code>, <code>CUIT</code>, <code>MAIL</code> también las parsea bien.
-      Matchea por CUIT/DNI primero, después por email; si no encuentra, crea nuevo.
-    </div>
-  </div>
-</details>
-
 <form method="get" action="/clientes" class="filter-form">
   <input type="search" name="q" value="{{ search }}"
          placeholder="Buscar por razón social, CUIT, email, teléfono o localidad…" class="search-input" />

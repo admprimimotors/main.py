@@ -164,6 +164,68 @@
   </div>
 </div>
 
+{# Eliminación definitiva — separada visualmente, requiere confirmación textual #}
+<details class="collapsible-card" style="border-color: rgba(239,68,68,.30);">
+  <summary style="color: #fca5a5;">
+    <span>⚠ Zona peligrosa — eliminar definitivamente</span>
+    <span class="caret" style="color: #fca5a5;">▾</span>
+  </summary>
+  <div class="collapsible-body">
+    <p style="margin: 0 0 14px; font-size: 13px; color: var(--muted-strong); line-height: 1.6;">
+      Eliminar borra el cliente <strong>permanentemente</strong> de la base de datos.
+      Esta acción <strong>no se puede deshacer</strong>. Si solo querés ocultarlo del listado, usá
+      <strong>Archivar</strong> arriba.
+    </p>
+    <form method="post" action="/clientes/{{ cliente.id }}/eliminar"
+          style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+      <input type="text" name="confirmacion" placeholder="Escribí ELIMINAR para confirmar"
+             autocomplete="off"
+             style="flex: 1 1 240px; background: var(--panel-2); color: var(--text);
+                    border: 1px solid var(--border); border-radius: 8px;
+                    padding: 10px 14px; font-size: 14px; outline: none;" />
+      <button type="submit"
+              style="background: rgba(239,68,68,.18); color: #fca5a5;
+                     border: 1px solid rgba(239,68,68,.40); border-radius: 8px;
+                     padding: 10px 16px; font-size: 14px; font-weight: 600;
+                     cursor: pointer; transition: background .12s;"
+              onmouseover="this.style.background='rgba(239,68,68,.32)';"
+              onmouseout="this.style.background='rgba(239,68,68,.18)';"
+              onclick="return confirm('¿Eliminar definitivamente {{ cliente.razon_social|replace(\"'\", \"\\\\'\")|e }}? Esta acción NO se puede deshacer.');">
+        🗑 Eliminar definitivamente
+      </button>
+    </form>
+  </div>
+</details>
+
+<style>
+details.collapsible-card {
+  margin-bottom: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  overflow: hidden;
+}
+details.collapsible-card > summary {
+  padding: 14px 22px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  user-select: none;
+}
+details.collapsible-card > summary::-webkit-details-marker { display: none; }
+details.collapsible-card > summary .caret {
+  font-size: 12px;
+  transition: transform .2s;
+}
+details.collapsible-card[open] > summary .caret { transform: rotate(180deg); }
+details.collapsible-card[open] > summary { border-bottom: 1px solid var(--border-soft); }
+.collapsible-body { padding: 18px 22px 22px; }
+</style>
+
 <div class="card">
   <div class="audit-row">
     {% if cliente.created_at %}<span>Creado: {{ cliente.created_at.strftime('%d/%m/%Y %H:%M') }}</span>{% endif %}

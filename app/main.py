@@ -30,7 +30,7 @@ from . import auth, catalogo, clientes, database, ml_client, precios, stock, sto
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.21.0"
+APP_VERSION = "0.22.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1424,6 +1424,7 @@ def clientes_nuevo_form(
             "form": form,
             "flash": flash,
             "condiciones_iva": clientes.CONDICIONES_IVA,
+            "provincias_ar": clientes.PROVINCIAS_AR,
             "provincias_disponibles": clientes.list_provincias(db),
             "localidades_disponibles": [],  # vacío en form de creación
         },
@@ -1632,6 +1633,7 @@ def cliente_editar_form(
             "form": form,
             "flash": flash,
             "condiciones_iva": clientes.CONDICIONES_IVA,
+            "provincias_ar": clientes.PROVINCIAS_AR,
             "provincias_disponibles": clientes.list_provincias(db),
             "localidades_disponibles": [],
         },
@@ -1702,6 +1704,29 @@ def cliente_reactivar(
     ok, msg = clientes.reactivar_cliente(db, cliente_id)
     request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
     return RedirectResponse(f"/clientes/{cliente_id}", status_code=303)
+
+
+@app.post("/clientes/{cliente_id:int}/eliminar")
+def cliente_eliminar(
+    request: Request,
+    cliente_id: int,
+    confirmacion: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    DELETE definitivo del cliente. Requiere que el usuario haya tipeado
+    el texto de confirmación en el form (defensa contra clicks accidentales).
+    """
+    if confirmacion.strip().upper() != "ELIMINAR":
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "Para eliminar definitivamente tenés que escribir ELIMINAR en el campo de confirmación.",
+        }
+        return RedirectResponse(f"/clientes/{cliente_id}", status_code=303)
+    ok, msg = clientes.eliminar_cliente(db, cliente_id)
+    request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
+    return RedirectResponse("/clientes", status_code=303)
 
 
 # ===============================================================

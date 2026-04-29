@@ -146,13 +146,12 @@
 
     <div class="form-row">
       <label for="provincia">Provincia</label>
-      <input id="provincia" name="provincia" type="text" maxlength="100"
-             list="provincias-list" value="{{ form.provincia or '' }}" />
-      <datalist id="provincias-list">
-        {% for p in provincias_disponibles or [] %}
-        <option value="{{ p }}"></option>
+      <select id="provincia" name="provincia">
+        <option value="">— Sin definir —</option>
+        {% for p in provincias_ar %}
+        <option value="{{ p }}" {% if form.provincia == p %}selected{% endif %}>{{ p }}</option>
         {% endfor %}
-      </datalist>
+      </select>
     </div>
 
     <div class="form-row">
