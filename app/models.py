@@ -238,6 +238,53 @@ class Vehiculo(Base):
 # Compatibilidad producto ↔ vehículo (M:N)
 # =============================================================
 
+class Cliente(Base):
+    """
+    Cliente del negocio. Schema compatible con el sistema viejo de Primi Motors
+    (mismos campos que el dataclass de `clientes/repo.py`) para que la migración
+    desde el SQLite local sea directa.
+    """
+    __tablename__ = "clientes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Identidad
+    razon_social: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    nombre_comercial: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    # Tributario
+    cuit_dni: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    condicion_iva: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+
+    # Contacto
+    telefono: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+
+    # Dirección
+    direccion: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    localidad: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    provincia: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    codigo_postal: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    # Otros
+    notas: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+
+    # Auditoría
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<Cliente id={self.id} razon_social={self.razon_social!r}>"
+
+
 class MLToken(Base):
     """
     Singleton (id=1) — guarda el refresh_token de Mercado Libre.

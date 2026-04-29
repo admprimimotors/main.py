@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}{{ cliente.razon_social }} · Clientes{% endblock %}
+{% block page_title %}Cliente{% endblock %}
+
+{% block content %}
+<style>
+  .breadcrumb {
+    color: var(--muted); font-size: 13px;
+    margin-bottom: 18px;
+  }
+  .breadcrumb a { color: var(--muted-strong); transition: color .12s; }
+  .breadcrumb a:hover { color: var(--brand-hover); }
+
+  .alert {
+    padding: 12px 16px; border-radius: 8px; font-size: 13px;
+    margin-bottom: 18px; border: 1px solid; line-height: 1.5;
+  }
+  .alert-success { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.40); color: #86efac; }
+  .alert-warning { background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d; }
+  .alert-error   { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+
+  .cliente-header { margin-bottom: 26px; }
+  .cliente-header h1 {
+    margin: 0 0 12px;
+    font-size: 26px; letter-spacing: -0.3px;
+    line-height: 1.25;
+  }
+  .badge-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .pbadge {
+    display: inline-flex; align-items: center;
+    padding: 5px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 500;
+    background: var(--panel-2); color: var(--muted-strong);
+    border: 1px solid var(--border-soft);
+  }
+  .pbadge-success {
+    background: rgba(34,197,94,.14); color: #86efac;
+    border-color: rgba(34,197,94,.30);
+  }
+  .pbadge-paused {
+    background: rgba(245,158,11,.10); color: #fcd34d;
+    border-color: rgba(245,158,11,.30);
+  }
+  .pbadge-doc {
+    font-family: ui-monospace, "SF Mono", monospace;
+    background: var(--brand-soft); color: var(--brand-hover);
+    border-color: rgba(160,25,22,.30);
+    font-weight: 600;
+  }
+
+  .info-grid {
+    display: grid; gap: 18px;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    margin-bottom: 22px;
+  }
+
+  .kv-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .kv-table tr { border-bottom: 1px solid var(--border-soft); }
+  .kv-table tr:last-child { border-bottom: none; }
+  .kv-table td { padding: 11px 0; }
+  .kv-table td:first-child { color: var(--muted); width: 42%; }
+  .kv-table td:last-child { color: var(--muted-strong); }
+  .kv-table a { color: var(--brand-hover); }
+  .kv-table a:hover { text-decoration: underline; }
+
+  .audit-row {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    font-size: 12px; color: var(--muted);
+  }
+</style>
+
+{% if flash %}
+<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>
+{% endif %}
+
+<div class="breadcrumb">
+  <a href="{{ back_url or '/clientes' }}">← Volver a clientes</a>
+</div>
+
+<div class="cliente-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+  <div style="flex: 1; min-width: 280px;">
+    <h1>{{ cliente.razon_social }}</h1>
+    <div class="badge-row">
+      {% if cliente.cuit_dni %}<span class="pbadge pbadge-doc">{{ format_cuit(cliente.cuit_dni) }}</span>{% endif %}
+      {% if cliente.condicion_iva %}<span class="pbadge">{{ cliente.condicion_iva }}</span>{% endif %}
+      {% if cliente.activo %}
+        <span class="pbadge pbadge-success">● Activo</span>
+      {% else %}
+        <span class="pbadge pbadge-paused">● Archivado</span>
+      {% endif %}
+    </div>
+  </div>
+  <a href="/clientes/{{ cliente.id }}/editar" class="btn btn-ghost">✎ Editar</a>
+</div>
+
+<div class="info-grid">
+  <div class="card">
+    <div class="card-title">Contacto</div>
+    <table class="kv-table">
+      <tr>
+        <td>Nombre comercial</td>
+        <td>{{ cliente.nombre_comercial or '—' }}</td>
+      </tr>
+      <tr>
+        <td>Email</td>
+        <td>
+          {% if cliente.email %}
+            <a href="mailto:{{ cliente.email }}">{{ cliente.email }}</a>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td>Teléfono</td>
+        <td>
+          {% if cliente.telefono %}
+            <a href="tel:{{ cliente.telefono }}">{{ cliente.telefono }}</a>
+            {% set wa_num = cliente.telefono | replace(' ', '') | replace('-', '') | replace('+', '') %}
+            <a href="https://wa.me/{{ wa_num }}" target="_blank" rel="noopener" style="margin-left: 8px; font-size: 12px;">↗ WhatsApp</a>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Dirección</div>
+    <table class="kv-table">
+      <tr><td>Dirección</td><td>{{ cliente.direccion or '—' }}</td></tr>
+      <tr><td>Localidad</td><td>{{ cliente.localidad or '—' }}</td></tr>
+      <tr><td>Provincia</td><td>{{ cliente.provincia or '—' }}</td></tr>
+      <tr><td>Código postal</td><td>{{ cliente.codigo_postal or '—' }}</td></tr>
+    </table>
+  </div>
+</div>
+
+{% if cliente.notas %}
+<div class="card" style="margin-bottom: 18px;">
+  <div class="card-title">Notas</div>
+  <p style="margin: 0; color: var(--muted-strong); line-height: 1.6; font-size: 13px; white-space: pre-line;">{{ cliente.notas }}</p>
+</div>
+{% endif %}
+
+{# Acciones secundarias #}
+<div class="card" style="margin-bottom: 18px;">
+  <div class="card-title">Acciones</div>
+  <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+    {% if cliente.activo %}
+    <form method="post" action="/clientes/{{ cliente.id }}/archivar" style="margin: 0;"
+          onsubmit="return confirm('Archivar este cliente? Quedará oculto del listado por defecto pero se preservará en la DB.');">
+      <button type="submit" class="btn btn-ghost">📦 Archivar cliente</button>
+    </form>
+    {% else %}
+    <form method="post" action="/clientes/{{ cliente.id }}/reactivar" style="margin: 0;">
+      <button type="submit" class="btn btn-ghost">↻ Reactivar cliente</button>
+    </form>
+    {% endif %}
+    <span style="font-size: 12px; color: var(--muted); margin-left: auto;">
+      Próximamente: ver remitos y notas de crédito de este cliente.
+    </span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="audit-row">
+    {% if cliente.created_at %}<span>Creado: {{ cliente.created_at.strftime('%d/%m/%Y %H:%M') }}</span>{% endif %}
+    {% if cliente.updated_at %}<span>Última actualización: {{ cliente.updated_at.strftime('%d/%m/%Y %H:%M') }}</span>{% endif %}
+  </div>
+</div>
+{% endblock %}

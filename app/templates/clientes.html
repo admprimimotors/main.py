@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block title %}Clientes · Primi Motors{% endblock %}
+{% block page_title %}Clientes{% endblock %}
+
+{% block content %}
+<style>
+  .alert {
+    padding: 12px 16px; border-radius: 8px; font-size: 13px;
+    margin-bottom: 18px; border: 1px solid; line-height: 1.5;
+  }
+  .alert-success { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.40); color: #86efac; }
+  .alert-warning { background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d; }
+  .alert-error   { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+  .alert code { background: rgba(0,0,0,.25); padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+
+  .filter-form {
+    display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap;
+    align-items: center;
+  }
+  .search-input {
+    flex: 1 1 280px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 14px; outline: none;
+    transition: border-color .15s;
+  }
+  .search-input:focus { border-color: var(--brand); }
+  .filter-select {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 13px; outline: none;
+    cursor: pointer; min-width: 140px;
+  }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table thead th {
+    text-align: left; padding: 12px 16px;
+    color: var(--muted); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    font-size: 11px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--panel-2);
+  }
+  .data-table tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    color: var(--muted-strong);
+  }
+  .data-table tbody tr:last-child td { border-bottom: none; }
+  .data-table tbody tr.clickable { cursor: pointer; transition: background .12s; }
+  .data-table tbody tr.clickable:hover { background: var(--panel-2); }
+  .data-table tbody tr.archivado { opacity: 0.55; }
+  .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .data-table code {
+    background: var(--panel-2); padding: 2px 6px; border-radius: 4px;
+    color: var(--brand-hover); font-size: 12px;
+    font-family: ui-monospace, "SF Mono", monospace;
+  }
+
+  .badge-success {
+    background: rgba(34,197,94,.14); color: #86efac;
+    padding: 3px 10px; border-radius: 999px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .badge-muted {
+    background: var(--panel-2); color: var(--muted);
+    padding: 3px 10px; border-radius: 999px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+
+  .pagination {
+    display: flex; align-items: center; justify-content: center;
+    gap: 6px; margin-top: 22px;
+  }
+
+  .upload-form {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .upload-form input[type=file] {
+    flex: 1 1 240px;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 13px;
+    cursor: pointer;
+  }
+  .upload-form input[type=file]::file-selector-button {
+    background: var(--panel); color: var(--muted-strong);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; margin-right: 12px;
+    cursor: pointer; font-size: 12px;
+  }
+  .help-text {
+    color: var(--muted); font-size: 12px; margin-top: 12px;
+    line-height: 1.6;
+  }
+  .help-text code {
+    background: var(--panel-2); padding: 1px 6px; border-radius: 4px;
+    color: var(--brand-hover); font-size: 11px;
+  }
+
+  /* Cards colapsables (mismo estilo que catálogo) */
+  details.collapsible-card {
+    margin-bottom: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  details.collapsible-card > summary {
+    padding: 14px 22px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background .12s;
+    user-select: none;
+  }
+  details.collapsible-card > summary:hover { background: var(--panel-2); }
+  details.collapsible-card > summary::-webkit-details-marker { display: none; }
+  details.collapsible-card > summary .summary-meta {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: normal; font-size: 12px; color: var(--muted);
+  }
+  details.collapsible-card > summary .caret {
+    color: var(--muted); font-size: 12px;
+    transition: transform .2s;
+    margin-left: 10px;
+  }
+  details.collapsible-card[open] > summary .caret { transform: rotate(180deg); }
+  details.collapsible-card[open] > summary {
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .collapsible-body { padding: 18px 22px 22px; }
+</style>
+
+{% if flash %}
+<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>
+{% endif %}
+
+<div class="page-intro" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+  <div>
+    <h2>Clientes</h2>
+    <p>{{ total }} cliente{{ '' if total == 1 else 's' }}{% if not incluir_archivados %} activo{{ '' if total == 1 else 's' }}{% endif %} en la base.</p>
+  </div>
+  <a href="/clientes/nuevo" class="btn">+ Nuevo cliente</a>
+</div>
+
+<details class="collapsible-card">
+  <summary>
+    <span>📋 Importar masivo desde Excel</span>
+    <span class="summary-meta">
+      Compatible con CSV viejo
+      <span class="caret">▾</span>
+    </span>
+  </summary>
+  <div class="collapsible-body">
+    <form method="post" action="/clientes/upload" enctype="multipart/form-data" class="upload-form">
+      <input type="file" name="archivo" accept=".xlsx,.xls" required />
+      <button type="submit" class="btn">Subir Excel</button>
+      <a href="/clientes/template" class="btn btn-ghost">Descargar template</a>
+    </form>
+    <div class="help-text">
+      Excel con columnas <code>razon_social</code> + opcionales (<code>cuit_dni</code>, <code>email</code>, <code>telefono</code>, <code>direccion</code>, etc.).
+      <strong>Compatible con tu CSV viejo</strong>: si las columnas se llaman <code>NOMBRE</code>, <code>DIRECCION</code>, <code>PROVINCIA_CP</code>, <code>TELEFONO</code>, <code>CUIT</code>, <code>MAIL</code> también las parsea bien.
+      Matchea por CUIT/DNI primero, después por email; si no encuentra, crea nuevo.
+    </div>
+  </div>
+</details>
+
+<form method="get" action="/clientes" class="filter-form">
+  <input type="search" name="q" value="{{ search }}"
+         placeholder="Buscar por razón social, CUIT, email, teléfono o localidad…" class="search-input" />
+
+  <select name="provincia" class="filter-select">
+    <option value="">Provincia: todas</option>
+    {% for p in provincias_disponibles %}
+    <option value="{{ p }}" {% if provincia == p %}selected{% endif %}>{{ p }}</option>
+    {% endfor %}
+  </select>
+
+  <select name="condicion_iva" class="filter-select">
+    <option value="">IVA: todas</option>
+    {% for c in condiciones_iva %}
+    <option value="{{ c }}" {% if condicion_iva == c %}selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+
+  <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted-strong);">
+    <input type="checkbox" name="incluir_archivados" value="on"
+           {% if incluir_archivados %}checked{% endif %} />
+    Incluir archivados
+  </label>
+
+  <button type="submit" class="btn">Filtrar</button>
+  {% if search or provincia or condicion_iva or incluir_archivados %}
+  <a href="/clientes" class="btn btn-ghost">Limpiar</a>
+  {% endif %}
+</form>
+
+{% if clientes %}
+<div class="card" style="padding: 0; overflow-x: auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Razón social</th>
+        <th>CUIT / DNI</th>
+        <th>IVA</th>
+        <th>Localidad</th>
+        <th>Provincia</th>
+        <th>Email</th>
+        <th>Teléfono</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in clientes %}
+      <tr class="clickable {% if not c.activo %}archivado{% endif %}"
+          onclick="location.href='/clientes/{{ c.id }}'">
+        <td><strong>{{ c.razon_social }}</strong>
+          {% if c.nombre_comercial %}<br><span style="font-size: 11px; color: var(--muted);">{{ c.nombre_comercial }}</span>{% endif %}
+        </td>
+        <td>{% if c.cuit_dni %}<code>{{ format_cuit(c.cuit_dni) }}</code>{% else %}—{% endif %}</td>
+        <td>{{ c.condicion_iva or '—' }}</td>
+        <td>{{ c.localidad or '—' }}</td>
+        <td>{{ c.provincia or '—' }}</td>
+        <td>{{ c.email or '—' }}</td>
+        <td>{{ c.telefono or '—' }}</td>
+        <td>
+          {% if c.activo %}
+            <span class="badge-success">Activo</span>
+          {% else %}
+            <span class="badge-muted">Archivado</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% set total_pages = ((total + page_size - 1) // page_size) if total > 0 else 1 %}
+{% set filter_qs = 'q=' ~ (search|urlencode) ~ '&provincia=' ~ (provincia|urlencode) ~ '&condicion_iva=' ~ (condicion_iva|urlencode) ~ ('&incluir_archivados=on' if incluir_archivados else '') %}
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+    <a href="?{{ filter_qs }}&page={{ page - 1 }}" class="btn btn-ghost">← Anterior</a>
+  {% endif %}
+  <span style="color: var(--muted); padding: 0 14px; font-size: 13px;">
+    Página {{ page }} de {{ total_pages }}
+  </span>
+  {% if page < total_pages %}
+    <a href="?{{ filter_qs }}&page={{ page + 1 }}" class="btn btn-ghost">Siguiente →</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card stub">
+  <div class="stub-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+      <circle cx="9" cy="7" r="4"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+    </svg>
+  </div>
+  <h2>{% if search or provincia or condicion_iva %}Sin resultados{% else %}Sin clientes todavía{% endif %}</h2>
+  <p>
+    {% if search or provincia or condicion_iva %}
+      No hay clientes con esos filtros. Probá ajustarlos o limpiarlos.
+    {% else %}
+      Empezá agregando uno con <strong>+ Nuevo cliente</strong>, o subí el Excel histórico desde el card de arriba.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+{% endblock %}

@@ -26,15 +26,19 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session as DbSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, catalogo, database, ml_client, precios, stock, storage
+from . import auth, catalogo, clientes, database, ml_client, precios, stock, storage
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.20.0"
+APP_VERSION = "0.21.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# Helpers globales para que los templates puedan llamarlos directo
+# (sin tener que pasarlos en cada context).
+templates.env.globals["format_cuit"] = clientes.format_cuit_display
 
 app = FastAPI(
     title=APP_NAME,
@@ -1344,6 +1348,363 @@ def precios_template(user: str = Depends(auth.require_user)):
 
 
 # ===============================================================
+# Clientes — listado + CRUD + upload masivo
+# ===============================================================
+# IMPORTANTE: las rutas estáticas (/nuevo, /upload, /template) van ANTES que
+# /{cliente_id:int} para que FastAPI las matchee primero.
+
+@app.get("/clientes", response_class=HTMLResponse)
+def clientes_view(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+    q: str = "",
+    provincia: str = "",
+    condicion_iva: str = "",
+    incluir_archivados: str = "",
+    page: int = 1,
+):
+    """Listado paginado de clientes con filtros."""
+    incluir = incluir_archivados.strip().lower() in ("on", "1", "true", "yes")
+    cli_list, total = clientes.list_clientes(
+        db,
+        search=q,
+        provincia=provincia,
+        condicion_iva=condicion_iva,
+        incluir_archivados=incluir,
+        page=page,
+    )
+    flash = request.session.pop("flash", None)
+    # Guardar URL para back navigation desde detalle/editar
+    relative_url = request.url.path
+    if request.url.query:
+        relative_url += "?" + request.url.query
+    request.session["last_clientes_url"] = relative_url
+
+    return templates.TemplateResponse(
+        request,
+        "clientes.html",
+        {
+            "user": user,
+            "active": "clientes",
+            "version": APP_VERSION,
+            "clientes": cli_list,
+            "total": total,
+            "search": q,
+            "provincia": provincia,
+            "condicion_iva": condicion_iva,
+            "incluir_archivados": incluir,
+            "page": page,
+            "page_size": clientes.PAGE_SIZE,
+            "flash": flash,
+            "provincias_disponibles": clientes.list_provincias(db),
+            "condiciones_iva": clientes.CONDICIONES_IVA,
+        },
+    )
+
+
+@app.get("/clientes/nuevo", response_class=HTMLResponse)
+def clientes_nuevo_form(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Form para crear un nuevo cliente."""
+    flash = request.session.pop("flash", None)
+    # Si hay form data preservada (después de un error), usarla
+    form = request.session.pop("cliente_form_draft", None) or {"activo": True}
+    return templates.TemplateResponse(
+        request,
+        "cliente_editar.html",
+        {
+            "user": user,
+            "active": "clientes",
+            "version": APP_VERSION,
+            "cliente": None,
+            "form": form,
+            "flash": flash,
+            "condiciones_iva": clientes.CONDICIONES_IVA,
+            "provincias_disponibles": clientes.list_provincias(db),
+            "localidades_disponibles": [],  # vacío en form de creación
+        },
+    )
+
+
+@app.post("/clientes/nuevo")
+def clientes_nuevo_save(
+    request: Request,
+    razon_social: str = Form(...),
+    nombre_comercial: str = Form(default=""),
+    cuit_dni: str = Form(default=""),
+    condicion_iva: str = Form(default=""),
+    direccion: str = Form(default=""),
+    localidad: str = Form(default=""),
+    provincia: str = Form(default=""),
+    codigo_postal: str = Form(default=""),
+    telefono: str = Form(default=""),
+    email: str = Form(default=""),
+    notas: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Crea un cliente nuevo."""
+    cli, msg = clientes.create_cliente(
+        db,
+        razon_social=razon_social,
+        nombre_comercial=nombre_comercial,
+        cuit_dni=cuit_dni,
+        condicion_iva=condicion_iva,
+        direccion=direccion,
+        localidad=localidad,
+        provincia=provincia,
+        codigo_postal=codigo_postal,
+        telefono=telefono,
+        email=email,
+        notas=notas,
+        activo=True,
+    )
+    if cli is None:
+        # Error: preservar form data y volver al form
+        request.session["cliente_form_draft"] = {
+            "razon_social": razon_social,
+            "nombre_comercial": nombre_comercial,
+            "cuit_dni": cuit_dni,
+            "condicion_iva": condicion_iva,
+            "direccion": direccion,
+            "localidad": localidad,
+            "provincia": provincia,
+            "codigo_postal": codigo_postal,
+            "telefono": telefono,
+            "email": email,
+            "notas": notas,
+            "activo": True,
+        }
+        request.session["flash"] = {"type": "error", "msg": msg}
+        return RedirectResponse("/clientes/nuevo", status_code=303)
+    request.session["flash"] = {"type": "success", "msg": msg}
+    return RedirectResponse(f"/clientes/{cli.id}", status_code=303)
+
+
+@app.post("/clientes/upload")
+async def clientes_upload(
+    request: Request,
+    archivo: UploadFile = File(...),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Excel/CSV masivo de clientes."""
+    fname = (archivo.filename or "").lower()
+    if not fname.endswith((".xlsx", ".xls")):
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "El archivo debe ser .xlsx o .xls",
+        }
+        return RedirectResponse("/clientes", status_code=303)
+
+    try:
+        file_bytes = await archivo.read()
+        result = clientes.process_clientes_upload(db, file_bytes)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/clientes", status_code=303)
+
+    parts = []
+    if result.creados:
+        parts.append(f"{result.creados} creados")
+    if result.actualizados:
+        parts.append(f"{result.actualizados} actualizados")
+    if result.sin_cambios:
+        parts.append(f"{result.sin_cambios} sin cambios")
+    summary = " · ".join(parts) if parts else "ningún cambio"
+
+    if result.ok:
+        request.session["flash"] = {"type": "success", "msg": f"✓ Upload OK — {summary}."}
+    else:
+        msg = (
+            f"Procesado con errores — {summary}. "
+            f"{len(result.errores)} errores: " + " · ".join(result.errores[:5])
+        )
+        if len(result.errores) > 5:
+            msg += f" (+{len(result.errores) - 5} más)"
+        request.session["flash"] = {
+            "type": "warning" if (result.creados or result.actualizados) else "error",
+            "msg": msg,
+        }
+    return RedirectResponse("/clientes", status_code=303)
+
+
+@app.get("/clientes/template")
+def clientes_template(user: str = Depends(auth.require_user)):
+    """Excel template de clientes."""
+    excel_bytes = clientes.generate_clientes_template()
+    return Response(
+        content=excel_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": 'attachment; filename="primi_motors_clientes_template.xlsx"'
+        },
+    )
+
+
+# Rutas con {cliente_id} — DESPUÉS de las estáticas. El converter :int garantiza
+# que /clientes/nuevo, /clientes/upload, etc. no caigan acá por confusión.
+
+@app.get("/clientes/{cliente_id:int}", response_class=HTMLResponse)
+def cliente_detail(
+    request: Request,
+    cliente_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Detalle de un cliente."""
+    cli = clientes.get_cliente(db, cliente_id)
+    if cli is None:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No existe cliente ID {cliente_id}.",
+        }
+        return RedirectResponse("/clientes", status_code=303)
+    flash = request.session.pop("flash", None)
+    back_url = request.session.get("last_clientes_url") or "/clientes"
+    return templates.TemplateResponse(
+        request,
+        "cliente.html",
+        {
+            "user": user,
+            "active": "clientes",
+            "version": APP_VERSION,
+            "cliente": cli,
+            "flash": flash,
+            "back_url": back_url,
+        },
+    )
+
+
+@app.get("/clientes/{cliente_id:int}/editar", response_class=HTMLResponse)
+def cliente_editar_form(
+    request: Request,
+    cliente_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Form para editar un cliente existente."""
+    cli = clientes.get_cliente(db, cliente_id)
+    if cli is None:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No existe cliente ID {cliente_id}.",
+        }
+        return RedirectResponse("/clientes", status_code=303)
+    flash = request.session.pop("flash", None)
+    form = request.session.pop("cliente_form_draft", None) or {
+        "razon_social": cli.razon_social,
+        "nombre_comercial": cli.nombre_comercial,
+        "cuit_dni": clientes.format_cuit_display(cli.cuit_dni) if cli.cuit_dni else "",
+        "condicion_iva": cli.condicion_iva,
+        "direccion": cli.direccion,
+        "localidad": cli.localidad,
+        "provincia": cli.provincia,
+        "codigo_postal": cli.codigo_postal,
+        "telefono": cli.telefono,
+        "email": cli.email,
+        "notas": cli.notas,
+        "activo": cli.activo,
+    }
+    return templates.TemplateResponse(
+        request,
+        "cliente_editar.html",
+        {
+            "user": user,
+            "active": "clientes",
+            "version": APP_VERSION,
+            "cliente": cli,
+            "form": form,
+            "flash": flash,
+            "condiciones_iva": clientes.CONDICIONES_IVA,
+            "provincias_disponibles": clientes.list_provincias(db),
+            "localidades_disponibles": [],
+        },
+    )
+
+
+@app.post("/clientes/{cliente_id:int}/editar")
+def cliente_editar_save(
+    request: Request,
+    cliente_id: int,
+    razon_social: str = Form(...),
+    nombre_comercial: str = Form(default=""),
+    cuit_dni: str = Form(default=""),
+    condicion_iva: str = Form(default=""),
+    direccion: str = Form(default=""),
+    localidad: str = Form(default=""),
+    provincia: str = Form(default=""),
+    codigo_postal: str = Form(default=""),
+    telefono: str = Form(default=""),
+    email: str = Form(default=""),
+    notas: str = Form(default=""),
+    activo: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Guarda cambios en un cliente."""
+    activo_bool = activo.strip().lower() in ("on", "true", "1", "yes")
+    ok, msg = clientes.update_cliente(
+        db, cliente_id,
+        razon_social=razon_social,
+        nombre_comercial=nombre_comercial,
+        cuit_dni=cuit_dni,
+        condicion_iva=condicion_iva,
+        direccion=direccion,
+        localidad=localidad,
+        provincia=provincia,
+        codigo_postal=codigo_postal,
+        telefono=telefono,
+        email=email,
+        notas=notas,
+        activo=activo_bool,
+    )
+    request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
+    if not ok:
+        return RedirectResponse(f"/clientes/{cliente_id}/editar", status_code=303)
+    return RedirectResponse(f"/clientes/{cliente_id}", status_code=303)
+
+
+@app.post("/clientes/{cliente_id:int}/archivar")
+def cliente_archivar(
+    request: Request,
+    cliente_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    ok, msg = clientes.archivar_cliente(db, cliente_id)
+    request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
+    return RedirectResponse(f"/clientes/{cliente_id}", status_code=303)
+
+
+@app.post("/clientes/{cliente_id:int}/reactivar")
+def cliente_reactivar(
+    request: Request,
+    cliente_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    ok, msg = clientes.reactivar_cliente(db, cliente_id)
+    request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
+    return RedirectResponse(f"/clientes/{cliente_id}", status_code=303)
+
+
+# ===============================================================
 # Stubs — secciones todavía sin construir
 # ===============================================================
 # Cada feature real va a reemplazar uno de estos handlers cuando esté lista.
@@ -1354,11 +1715,10 @@ _STUBS = [
     # "catalogo" ya no es stub — vive en su propio módulo (app/catalogo.py + rutas más abajo)
     # "stock" ya no es stub — vive en app/stock.py + rutas dedicadas
     # "precios" ya no es stub — vive en app/precios.py + rutas dedicadas
+    # "clientes" ya no es stub — vive en app/clientes.py + rutas dedicadas
     ("publicaciones", "Publicaciones ML",
      "Estado de los ítems publicados en Mercado Libre — pausar, "
      "republicar y ver estadísticas de cada uno."),
-    ("clientes", "Clientes",
-     "Historial de compras, remitos y notas de crédito por cliente."),
     ("mensajes", "Mensajes ML",
      "Preguntas de compradores en Mercado Libre y respuestas "
      "automáticas inteligentes."),

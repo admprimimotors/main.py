@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}{% if cliente %}Editar {{ cliente.razon_social }}{% else %}Nuevo cliente{% endif %} · Primi Motors{% endblock %}
+{% block page_title %}{% if cliente %}Editar cliente{% else %}Nuevo cliente{% endif %}{% endblock %}
+
+{% block content %}
+<style>
+  .breadcrumb { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .breadcrumb a { color: var(--muted-strong); transition: color .12s; }
+  .breadcrumb a:hover { color: var(--brand-hover); }
+
+  .alert {
+    padding: 12px 16px; border-radius: 8px; font-size: 13px;
+    margin-bottom: 18px; border: 1px solid; line-height: 1.5;
+  }
+  .alert-error { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+
+  .edit-form { display: flex; flex-direction: column; gap: 18px; }
+  .form-row { display: flex; flex-direction: column; gap: 6px; }
+  .form-row label {
+    font-size: 12px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .form-row input[type=text],
+  .form-row input[type=email],
+  .form-row input[type=tel],
+  .form-row textarea,
+  .form-row select {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 14px; outline: none;
+    font-family: inherit;
+    transition: border-color .15s;
+    width: 100%;
+  }
+  .form-row input:focus, .form-row textarea:focus, .form-row select:focus {
+    border-color: var(--brand);
+  }
+  .form-row textarea { min-height: 90px; resize: vertical; }
+  .form-row .helper { font-size: 12px; color: var(--muted); }
+
+  .form-grid {
+    display: grid; gap: 18px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+  .form-actions {
+    display: flex; gap: 10px; justify-content: flex-end; align-items: center;
+    margin-top: 8px; padding-top: 18px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .activo-row {
+    display: flex; gap: 10px; align-items: center;
+    padding: 10px 14px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .activo-row input[type=checkbox] { width: auto; }
+</style>
+
+{% if flash %}
+<div class="alert alert-error">{{ flash.msg }}</div>
+{% endif %}
+
+<div class="breadcrumb">
+  {% if cliente %}
+  <a href="/clientes/{{ cliente.id }}">← Volver al detalle</a>
+  {% else %}
+  <a href="/clientes">← Volver a clientes</a>
+  {% endif %}
+</div>
+
+<div class="page-intro">
+  <h2>{% if cliente %}Editar{% else %}Nuevo cliente{% endif %}</h2>
+  {% if cliente %}<p>ID: {{ cliente.id }}</p>{% endif %}
+</div>
+
+<form method="post"
+      action="{% if cliente %}/clientes/{{ cliente.id }}/editar{% else %}/clientes/nuevo{% endif %}"
+      class="edit-form card">
+
+  <div class="form-row">
+    <label for="razon_social">Razón social *</label>
+    <input id="razon_social" name="razon_social" type="text" maxlength="200" required
+           value="{{ form.razon_social or '' }}" autofocus />
+    <span class="helper">Cómo aparece el cliente en facturas / remitos. Obligatorio.</span>
+  </div>
+
+  <div class="form-row">
+    <label for="nombre_comercial">Nombre comercial</label>
+    <input id="nombre_comercial" name="nombre_comercial" type="text" maxlength="200"
+           value="{{ form.nombre_comercial or '' }}" />
+    <span class="helper">Opcional. Si trabaja con nombre de fantasía distinto a la razón social.</span>
+  </div>
+
+  <div class="form-grid">
+    <div class="form-row">
+      <label for="cuit_dni">CUIT / DNI</label>
+      <input id="cuit_dni" name="cuit_dni" type="text" maxlength="20"
+             value="{{ form.cuit_dni or '' }}" placeholder="20-12345678-9 o 12345678" />
+      <span class="helper">Acepta con o sin guiones. Único — no puede repetir entre clientes.</span>
+    </div>
+
+    <div class="form-row">
+      <label for="condicion_iva">Condición IVA</label>
+      <select id="condicion_iva" name="condicion_iva">
+        <option value="">— Sin definir —</option>
+        {% for c in condiciones_iva %}
+        <option value="{{ c }}" {% if form.condicion_iva == c %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="form-grid">
+    <div class="form-row">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" maxlength="120"
+             value="{{ form.email or '' }}" />
+    </div>
+
+    <div class="form-row">
+      <label for="telefono">Teléfono</label>
+      <input id="telefono" name="telefono" type="tel" maxlength="40"
+             value="{{ form.telefono or '' }}" placeholder="+54 9 11 1234-5678" />
+    </div>
+  </div>
+
+  <div class="form-row">
+    <label for="direccion">Dirección</label>
+    <input id="direccion" name="direccion" type="text" maxlength="200"
+           value="{{ form.direccion or '' }}" placeholder="Calle 12 1234" />
+  </div>
+
+  <div class="form-grid">
+    <div class="form-row">
+      <label for="localidad">Localidad</label>
+      <input id="localidad" name="localidad" type="text" maxlength="100"
+             list="localidades-list" value="{{ form.localidad or '' }}" />
+      <datalist id="localidades-list">
+        {% for l in localidades_disponibles or [] %}
+        <option value="{{ l }}"></option>
+        {% endfor %}
+      </datalist>
+    </div>
+
+    <div class="form-row">
+      <label for="provincia">Provincia</label>
+      <input id="provincia" name="provincia" type="text" maxlength="100"
+             list="provincias-list" value="{{ form.provincia or '' }}" />
+      <datalist id="provincias-list">
+        {% for p in provincias_disponibles or [] %}
+        <option value="{{ p }}"></option>
+        {% endfor %}
+      </datalist>
+    </div>
+
+    <div class="form-row">
+      <label for="codigo_postal">Código postal</label>
+      <input id="codigo_postal" name="codigo_postal" type="text" maxlength="20"
+             value="{{ form.codigo_postal or '' }}" />
+    </div>
+  </div>
+
+  <div class="form-row">
+    <label for="notas">Notas</label>
+    <textarea id="notas" name="notas" placeholder="Cualquier observación interna del cliente">{{ form.notas or '' }}</textarea>
+  </div>
+
+  {% if cliente %}
+  <div class="form-row">
+    <label class="activo-row" for="activo">
+      <input id="activo" name="activo" type="checkbox" value="on"
+             {% if form.activo %}checked{% endif %} />
+      <span>
+        <strong>Activo</strong> — visible en el listado por defecto.
+        Si lo destildás queda <strong>archivado</strong> (oculto pero preservado en DB).
+      </span>
+    </label>
+  </div>
+  {% endif %}
+
+  <div class="form-actions">
+    {% if cliente %}
+    <a href="/clientes/{{ cliente.id }}" class="btn btn-ghost">Cancelar</a>
+    {% else %}
+    <a href="/clientes" class="btn btn-ghost">Cancelar</a>
+    {% endif %}
+    <button type="submit" class="btn">
+      {% if cliente %}Guardar cambios{% else %}Crear cliente{% endif %}
+    </button>
+  </div>
+</form>
+{% endblock %}
