@@ -1600,44 +1600,55 @@ def cliente_editar_form(
     db: DbSession = Depends(get_db),
 ):
     """Form para editar un cliente existente."""
-    cli = clientes.get_cliente(db, cliente_id)
-    if cli is None:
+    try:
+        cli = clientes.get_cliente(db, cliente_id)
+        if cli is None:
+            request.session["flash"] = {
+                "type": "error",
+                "msg": f"No existe cliente ID {cliente_id}.",
+            }
+            return RedirectResponse("/clientes", status_code=303)
+        flash = request.session.pop("flash", None)
+        form = request.session.pop("cliente_form_draft", None) or {
+            "razon_social": cli.razon_social,
+            "nombre_comercial": cli.nombre_comercial,
+            "cuit_dni": clientes.format_cuit_display(cli.cuit_dni) if cli.cuit_dni else "",
+            "condicion_iva": cli.condicion_iva,
+            "direccion": cli.direccion,
+            "localidad": cli.localidad,
+            "provincia": cli.provincia,
+            "codigo_postal": cli.codigo_postal,
+            "telefono": cli.telefono,
+            "email": cli.email,
+            "notas": cli.notas,
+            "activo": cli.activo,
+        }
+        return templates.TemplateResponse(
+            request,
+            "cliente_editar.html",
+            {
+                "user": user,
+                "active": "clientes",
+                "version": APP_VERSION,
+                "cliente": cli,
+                "form": form,
+                "flash": flash,
+                "condiciones_iva": clientes.CONDICIONES_IVA,
+                "provincias_ar": clientes.PROVINCIAS_AR,
+                "provincias_disponibles": clientes.list_provincias(db),
+                "localidades_disponibles": [],
+            },
+        )
+    except Exception as e:
+        # Loguear traceback completo a stderr (Render captura)
+        import traceback
+        traceback.print_exc()
+        # Mostrar el error específico al usuario en vez de un 500 mudo
         request.session["flash"] = {
             "type": "error",
-            "msg": f"No existe cliente ID {cliente_id}.",
+            "msg": f"Error al abrir el editor del cliente: {type(e).__name__}: {e}",
         }
-        return RedirectResponse("/clientes", status_code=303)
-    flash = request.session.pop("flash", None)
-    form = request.session.pop("cliente_form_draft", None) or {
-        "razon_social": cli.razon_social,
-        "nombre_comercial": cli.nombre_comercial,
-        "cuit_dni": clientes.format_cuit_display(cli.cuit_dni) if cli.cuit_dni else "",
-        "condicion_iva": cli.condicion_iva,
-        "direccion": cli.direccion,
-        "localidad": cli.localidad,
-        "provincia": cli.provincia,
-        "codigo_postal": cli.codigo_postal,
-        "telefono": cli.telefono,
-        "email": cli.email,
-        "notas": cli.notas,
-        "activo": cli.activo,
-    }
-    return templates.TemplateResponse(
-        request,
-        "cliente_editar.html",
-        {
-            "user": user,
-            "active": "clientes",
-            "version": APP_VERSION,
-            "cliente": cli,
-            "form": form,
-            "flash": flash,
-            "condiciones_iva": clientes.CONDICIONES_IVA,
-            "provincias_ar": clientes.PROVINCIAS_AR,
-            "provincias_disponibles": clientes.list_provincias(db),
-            "localidades_disponibles": [],
-        },
-    )
+        return RedirectResponse(f"/clientes/{cliente_id}", status_code=303)
 
 
 @app.post("/clientes/{cliente_id:int}/editar")
