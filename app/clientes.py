@@ -308,16 +308,33 @@ def eliminar_cliente(db: Session, cliente_id: int) -> tuple[bool, str]:
     A diferencia de archivar (soft delete que solo flippea activo=False),
     este DELETE saca el row de la tabla.
 
-    En el futuro, cuando existan remitos/notas_credito linkeados con FK al
-    cliente, esta función va a tener que primero validar que no existen
-    documentos asociados (o cascadear, según política).
+    Verifica post-commit que el row efectivamente se haya borrado, para
+    detectar bugs silenciosos (ej: rollback implícito por algún listener).
     """
     cli = get_cliente(db, cliente_id)
     if cli is None:
         return False, f"No existe el cliente ID {cliente_id}"
     razon = cli.razon_social
-    db.delete(cli)
-    db.commit()
+    cid = cli.id
+
+    try:
+        db.delete(cli)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        return False, f"Error al eliminar: {type(e).__name__}: {e}"
+
+    # Sanity check: ¿quedó realmente fuera?
+    db.expire_all()  # invalidar cache de identity map
+    still_there = db.execute(
+        select(Cliente).where(Cliente.id == cid)
+    ).scalar_one_or_none()
+    if still_there is not None:
+        return False, (
+            f"DELETE no surtió efecto: el cliente '{razon}' (ID {cid}) "
+            "sigue en la DB. Revisá los logs de Render."
+        )
+
     return True, f"✓ Cliente '{razon}' eliminado definitivamente"
 
 
