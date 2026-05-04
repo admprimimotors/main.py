@@ -23,14 +23,26 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select as select_
 from sqlalchemy.orm import Session as DbSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, catalogo, clientes, database, ml_client, precios, stock, storage
+from . import (
+    auth,
+    catalogo,
+    clientes,
+    database,
+    ml_client,
+    notas_credito,
+    precios,
+    remitos,
+    stock,
+    storage,
+)
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.22.0"
+APP_VERSION = "0.23.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1738,6 +1750,428 @@ def cliente_eliminar(
     ok, msg = clientes.eliminar_cliente(db, cliente_id)
     request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
     return RedirectResponse("/clientes", status_code=303)
+
+
+# ===============================================================
+# API JSON para autocomplete de productos en formularios de remitos/NC
+# ===============================================================
+
+@app.get("/api/productos/lookup")
+def api_producto_lookup(
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Lookup por SKU exacto. Devuelve datos básicos para autocompletar forms."""
+    from .models import Producto
+    prod = db.execute(
+        select_(Producto).where(Producto.sku == sku.strip())
+    ).scalar_one_or_none() if sku.strip() else None
+    if prod is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse({
+        "id": prod.id,
+        "sku": prod.sku,
+        "titulo": prod.titulo,
+        "precio_final": float(prod.precio_final) if prod.precio_final is not None else 0,
+        "stock_actual": prod.stock_actual,
+    })
+
+
+# ===============================================================
+# Helpers compartidos por remitos y NC
+# ===============================================================
+
+def _parse_items_from_form(
+    item_sku: list[str],
+    item_descripcion: list[str],
+    item_cantidad: list[str],
+    item_precio: list[str],
+    item_descuento: list[str],
+) -> list[remitos.ItemInput]:
+    """Convierte las listas paralelas del form en una lista de ItemInput."""
+    items: list[remitos.ItemInput] = []
+    n = max(
+        len(item_sku), len(item_descripcion),
+        len(item_cantidad), len(item_precio), len(item_descuento),
+    )
+    for i in range(n):
+        desc = (item_descripcion[i] if i < len(item_descripcion) else "").strip()
+        if not desc:
+            continue  # skip filas vacías
+        try:
+            cant = int(item_cantidad[i]) if i < len(item_cantidad) else 0
+        except (ValueError, TypeError):
+            cant = 0
+        if cant <= 0:
+            continue
+        from decimal import Decimal as _D
+        try:
+            precio = _D(str(item_precio[i] if i < len(item_precio) else "0").replace(",", "."))
+        except Exception:
+            precio = _D("0")
+        try:
+            desc_pc = _D(str(item_descuento[i] if i < len(item_descuento) else "0").replace(",", "."))
+        except Exception:
+            desc_pc = _D("0")
+        sku = (item_sku[i] if i < len(item_sku) else "").strip() or None
+        items.append(remitos.ItemInput(
+            descripcion=desc,
+            cantidad=cant,
+            precio_unitario=precio,
+            descuento_porc=desc_pc,
+            sku=sku,
+        ))
+    return items
+
+
+def _list_clientes_for_form(db) -> list:
+    """Lista todos los clientes activos, ordenados por razón social, para los selects."""
+    cli_list, _ = clientes.list_clientes(db, page=1, incluir_archivados=False)
+    # Si hay más de 50, traer todos sin paginar
+    from .models import Cliente as _Cli
+    return list(db.execute(
+        select_(_Cli).where(_Cli.activo == True).order_by(_Cli.razon_social.asc())  # noqa: E712
+    ).scalars().all())
+
+
+# ===============================================================
+# Remitos
+# ===============================================================
+
+@app.get("/remitos", response_class=HTMLResponse)
+def remitos_view(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+    q: str = "",
+    estado: str = "",
+    page: int = 1,
+):
+    rem_list, total = remitos.list_remitos(db, search=q, estado=estado, page=page)
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "remitos.html",
+        {
+            "user": user,
+            "active": "remitos",
+            "version": APP_VERSION,
+            "remitos": rem_list,
+            "total": total,
+            "search": q,
+            "estado": estado,
+            "page": page,
+            "page_size": remitos.PAGE_SIZE,
+            "flash": flash,
+        },
+    )
+
+
+@app.get("/remitos/nuevo", response_class=HTMLResponse)
+def remitos_nuevo_form(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    flash = request.session.pop("flash", None)
+    form = request.session.pop("remito_form_draft", None) or {}
+    return templates.TemplateResponse(
+        request,
+        "remito_nuevo.html",
+        {
+            "user": user,
+            "active": "remitos",
+            "version": APP_VERSION,
+            "clientes": _list_clientes_for_form(db),
+            "proximo_numero": remitos.next_remito_numero(db),
+            "form": form,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/remitos/nuevo")
+def remitos_nuevo_save(
+    request: Request,
+    cliente_id: int = Form(...),
+    condicion_venta: str = Form(default=""),
+    forma_pago: str = Form(default=""),
+    descuento_general: str = Form(default="0"),
+    observaciones: str = Form(default=""),
+    item_sku: list[str] = Form(default=[]),
+    item_descripcion: list[str] = Form(default=[]),
+    item_cantidad: list[str] = Form(default=[]),
+    item_precio: list[str] = Form(default=[]),
+    item_descuento: list[str] = Form(default=[]),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    items = _parse_items_from_form(
+        item_sku, item_descripcion, item_cantidad, item_precio, item_descuento
+    )
+    if not items:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "El remito necesita al menos un item con descripción y cantidad > 0.",
+        }
+        return RedirectResponse("/remitos/nuevo", status_code=303)
+
+    from decimal import Decimal as _D
+    try:
+        desc_gen_dec = _D(str(descuento_general).replace(",", "."))
+    except Exception:
+        desc_gen_dec = _D("0")
+
+    try:
+        remito = remitos.crear_remito(
+            db, cliente_id, items,
+            condicion_venta=condicion_venta,
+            forma_pago=forma_pago,
+            descuento_general=desc_gen_dec,
+            observaciones=observaciones,
+        )
+    except remitos.StockInsuficienteError as e:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Stock insuficiente para SKU {e.sku}: hay {e.disponible}, se piden {e.pedido}. Ajustá la cantidad o el SKU.",
+        }
+        return RedirectResponse("/remitos/nuevo", status_code=303)
+    except remitos.RemitoError as e:
+        request.session["flash"] = {"type": "error", "msg": str(e)}
+        return RedirectResponse("/remitos/nuevo", status_code=303)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/remitos/nuevo", status_code=303)
+
+    request.session["flash"] = {
+        "type": "success",
+        "msg": f"✓ Remito {remito.numero} creado. Stock descontado correctamente.",
+    }
+    return RedirectResponse(f"/remitos/{remito.id}", status_code=303)
+
+
+@app.get("/remitos/{remito_id:int}", response_class=HTMLResponse)
+def remito_detail(
+    request: Request,
+    remito_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    remito = remitos.get_remito(db, remito_id)
+    if remito is None:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No existe el remito ID {remito_id}.",
+        }
+        return RedirectResponse("/remitos", status_code=303)
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "remito.html",
+        {
+            "user": user,
+            "active": "remitos",
+            "version": APP_VERSION,
+            "remito": remito,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/remitos/{remito_id:int}/anular")
+def remito_anular(
+    request: Request,
+    remito_id: int,
+    motivo: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    ok, msg = remitos.anular_remito(db, remito_id, motivo=motivo)
+    request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
+    return RedirectResponse(f"/remitos/{remito_id}", status_code=303)
+
+
+# ===============================================================
+# Notas de Crédito
+# ===============================================================
+
+@app.get("/notas-credito", response_class=HTMLResponse)
+def ncs_view(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+    q: str = "",
+    estado: str = "",
+    page: int = 1,
+):
+    nc_list, total = notas_credito.list_ncs(db, search=q, estado=estado, page=page)
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "notas_credito.html",
+        {
+            "user": user,
+            "active": "notas_credito",
+            "version": APP_VERSION,
+            "ncs": nc_list,
+            "total": total,
+            "search": q,
+            "estado": estado,
+            "page": page,
+            "page_size": notas_credito.PAGE_SIZE,
+            "flash": flash,
+        },
+    )
+
+
+@app.get("/notas-credito/nuevo", response_class=HTMLResponse)
+def ncs_nuevo_form(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    flash = request.session.pop("flash", None)
+    form = request.session.pop("nc_form_draft", None) or {}
+    return templates.TemplateResponse(
+        request,
+        "nota_credito_nuevo.html",
+        {
+            "user": user,
+            "active": "notas_credito",
+            "version": APP_VERSION,
+            "clientes": _list_clientes_for_form(db),
+            "proximo_numero": notas_credito.next_nc_numero(db),
+            "motivos": notas_credito.MOTIVOS_NC,
+            "form": form,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/notas-credito/nuevo")
+def ncs_nuevo_save(
+    request: Request,
+    cliente_id: int = Form(...),
+    motivo: str = Form(default=""),
+    remito_origen_id: str = Form(default=""),
+    descuento_general: str = Form(default="0"),
+    observaciones: str = Form(default=""),
+    item_sku: list[str] = Form(default=[]),
+    item_descripcion: list[str] = Form(default=[]),
+    item_cantidad: list[str] = Form(default=[]),
+    item_precio: list[str] = Form(default=[]),
+    item_descuento: list[str] = Form(default=[]),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    items = _parse_items_from_form(
+        item_sku, item_descripcion, item_cantidad, item_precio, item_descuento
+    )
+    if not items:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": "La NC necesita al menos un item con descripción y cantidad > 0.",
+        }
+        return RedirectResponse("/notas-credito/nuevo", status_code=303)
+
+    from decimal import Decimal as _D
+    try:
+        desc_gen_dec = _D(str(descuento_general).replace(",", "."))
+    except Exception:
+        desc_gen_dec = _D("0")
+
+    remito_orig: Optional[int] = None
+    rstr = (remito_origen_id or "").strip()
+    if rstr:
+        try:
+            remito_orig = int(rstr)
+        except ValueError:
+            request.session["flash"] = {
+                "type": "error",
+                "msg": "El ID del remito de origen debe ser un número entero.",
+            }
+            return RedirectResponse("/notas-credito/nuevo", status_code=303)
+
+    try:
+        nc = notas_credito.crear_nc(
+            db, cliente_id, items,
+            motivo=motivo,
+            remito_origen_id=remito_orig,
+            descuento_general=desc_gen_dec,
+            observaciones=observaciones,
+        )
+    except remitos.RemitoError as e:
+        request.session["flash"] = {"type": "error", "msg": str(e)}
+        return RedirectResponse("/notas-credito/nuevo", status_code=303)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/notas-credito/nuevo", status_code=303)
+
+    request.session["flash"] = {
+        "type": "success",
+        "msg": f"✓ NC {nc.numero} creada. Stock reincorporado correctamente.",
+    }
+    return RedirectResponse(f"/notas-credito/{nc.id}", status_code=303)
+
+
+@app.get("/notas-credito/{nc_id:int}", response_class=HTMLResponse)
+def nc_detail(
+    request: Request,
+    nc_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    nc = notas_credito.get_nc(db, nc_id)
+    if nc is None:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No existe la NC ID {nc_id}.",
+        }
+        return RedirectResponse("/notas-credito", status_code=303)
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "nota_credito.html",
+        {
+            "user": user,
+            "active": "notas_credito",
+            "version": APP_VERSION,
+            "nc": nc,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/notas-credito/{nc_id:int}/anular")
+def nc_anular(
+    request: Request,
+    nc_id: int,
+    motivo: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    ok, msg = notas_credito.anular_nc(db, nc_id, motivo=motivo)
+    request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
+    return RedirectResponse(f"/notas-credito/{nc_id}", status_code=303)
 
 
 # ===============================================================

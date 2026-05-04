@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Notas de Crédito · Primi Motors{% endblock %}
+{% block page_title %}Notas de Crédito{% endblock %}
+
+{% block content %}
+<style>
+  .alert { padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 18px; border: 1px solid; line-height: 1.5; }
+  .alert-success { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.40); color: #86efac; }
+  .alert-warning { background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d; }
+  .alert-error   { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+
+  .filter-form { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; align-items: center; }
+  .search-input { flex: 1 1 280px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; outline: none; }
+  .search-input:focus { border-color: var(--brand); }
+  .filter-select { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; cursor: pointer; min-width: 140px; }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table thead th { text-align: left; padding: 12px 16px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.4px; font-size: 11px; border-bottom: 1px solid var(--border-soft); background: var(--panel-2); }
+  .data-table tbody td { padding: 12px 16px; border-bottom: 1px solid var(--border-soft); color: var(--muted-strong); }
+  .data-table tbody tr:last-child td { border-bottom: none; }
+  .data-table tbody tr.clickable { cursor: pointer; transition: background .12s; }
+  .data-table tbody tr.clickable:hover { background: var(--panel-2); }
+  .data-table tbody tr.anulada { opacity: 0.5; text-decoration: line-through; }
+  .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .data-table .numero { font-family: ui-monospace, "SF Mono", monospace; color: var(--brand-hover); font-weight: 600; }
+
+  .badge-success { background: rgba(34,197,94,.14); color: #86efac; padding: 3px 10px; border-radius: 999px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .badge-danger { background: rgba(239,68,68,.10); color: #fca5a5; padding: 3px 10px; border-radius: 999px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+
+  .pagination { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 22px; }
+</style>
+
+{% if flash %}<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>{% endif %}
+
+<div class="page-intro" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+  <div>
+    <h2>Notas de Crédito</h2>
+    <p>{{ total }} NC{{ '' if total == 1 else 's' }} en la base. Al crear una NC, el stock SUBE automáticamente.</p>
+  </div>
+  <a href="/notas-credito/nuevo" class="btn">+ Nueva NC</a>
+</div>
+
+<form method="get" action="/notas-credito" class="filter-form">
+  <input type="search" name="q" value="{{ search }}" placeholder="Buscar por número o cliente…" class="search-input" />
+  <select name="estado" class="filter-select">
+    <option value="">Estado: todos</option>
+    <option value="emitida" {% if estado == 'emitida' %}selected{% endif %}>Emitidas</option>
+    <option value="anulada" {% if estado == 'anulada' %}selected{% endif %}>Anuladas</option>
+  </select>
+  <button type="submit" class="btn">Filtrar</button>
+  {% if search or estado %}<a href="/notas-credito" class="btn btn-ghost">Limpiar</a>{% endif %}
+</form>
+
+{% if ncs %}
+<div class="card" style="padding: 0; overflow-x: auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Nº</th>
+        <th>Fecha</th>
+        <th>Cliente</th>
+        <th>Motivo</th>
+        <th>Remito orig.</th>
+        <th class="num">Total</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for n in ncs %}
+      <tr class="clickable {% if n.estado == 'anulada' %}anulada{% endif %}"
+          onclick="location.href='/notas-credito/{{ n.id }}'">
+        <td><span class="numero">{{ "{:04d}".format(n.numero) }}</span></td>
+        <td>{{ n.fecha.strftime('%d/%m/%Y') if n.fecha else '—' }}</td>
+        <td>{{ n.cliente_razon_social }}</td>
+        <td>{{ n.motivo or '—' }}</td>
+        <td>{% if n.remito_origen_id %}<a href="/remitos/{{ n.remito_origen_id }}" onclick="event.stopPropagation();" style="color: var(--brand-hover);">↗</a>{% else %}—{% endif %}</td>
+        <td class="num"><strong>${{ "{:,.0f}".format(n.total|float) }}</strong></td>
+        <td>{% if n.estado == 'emitida' %}<span class="badge-success">Emitida</span>{% else %}<span class="badge-danger">Anulada</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% set total_pages = ((total + page_size - 1) // page_size) if total > 0 else 1 %}
+{% set filter_qs = 'q=' ~ (search|urlencode) ~ '&estado=' ~ (estado|urlencode) %}
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}<a href="?{{ filter_qs }}&page={{ page - 1 }}" class="btn btn-ghost">← Anterior</a>{% endif %}
+  <span style="color: var(--muted); padding: 0 14px; font-size: 13px;">Página {{ page }} de {{ total_pages }}</span>
+  {% if page < total_pages %}<a href="?{{ filter_qs }}&page={{ page + 1 }}" class="btn btn-ghost">Siguiente →</a>{% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card stub">
+  <div class="stub-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
+  <h2>{% if search or estado %}Sin resultados{% else %}Sin notas de crédito todavía{% endif %}</h2>
+  <p>{% if search or estado %}Probá ajustar los filtros.{% else %}Las NC se crean cuando devolvés mercadería o emitís un crédito a un cliente.{% endif %}</p>
+</div>
+{% endif %}
+{% endblock %}

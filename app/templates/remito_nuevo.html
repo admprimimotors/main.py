@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %}Nuevo remito · Primi Motors{% endblock %}
+{% block page_title %}Nuevo remito{% endblock %}
+
+{% block content %}
+<style>
+  .breadcrumb { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .breadcrumb a { color: var(--muted-strong); }
+  .breadcrumb a:hover { color: var(--brand-hover); }
+
+  .alert { padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 18px; border: 1px solid; line-height: 1.5; }
+  .alert-error   { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+  .alert-warning { background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d; }
+
+  .form-row { display: flex; flex-direction: column; gap: 6px; }
+  .form-row label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  .form-row input, .form-row select, .form-row textarea {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 14px; outline: none; font-family: inherit; width: 100%;
+  }
+  .form-row input:focus, .form-row select:focus, .form-row textarea:focus { border-color: var(--brand); }
+  .form-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+  .items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .items-table thead th { text-align: left; padding: 10px; color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 1px solid var(--border-soft); background: var(--panel-2); }
+  .items-table tbody td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+  .items-table input { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font-size: 13px; outline: none; width: 100%; }
+  .items-table input:focus { border-color: var(--brand); }
+  .items-table input.readonly { opacity: 0.7; cursor: not-allowed; }
+  .items-table .col-sku { width: 130px; }
+  .items-table .col-cant { width: 70px; text-align: right; }
+  .items-table .col-precio { width: 110px; text-align: right; }
+  .items-table .col-desc { width: 70px; text-align: right; }
+  .items-table .col-subtotal { width: 110px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); padding-right: 12px; }
+  .items-table .col-borrar { width: 36px; text-align: center; }
+  .btn-row-del { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 4px; }
+  .btn-row-del:hover { color: #fca5a5; }
+  .free-line-tag { font-size: 10px; color: #fcd34d; padding: 2px 6px; border-radius: 4px; background: rgba(245,158,11,.10); margin-left: 4px; }
+
+  .totals-block { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding: 14px 16px; border-top: 1px solid var(--border-soft); background: var(--panel-2); }
+  .totals-block .total { font-size: 18px; font-weight: 700; color: var(--text); }
+
+  .form-actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--border-soft); }
+</style>
+
+{% if flash %}<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>{% endif %}
+
+<div class="breadcrumb"><a href="/remitos">← Volver a remitos</a></div>
+
+<div class="page-intro">
+  <h2>Nuevo remito</h2>
+  <p>Próximo número: <strong>{{ "{:04d}".format(proximo_numero) }}</strong></p>
+</div>
+
+<form method="post" action="/remitos/nuevo" class="card" style="display: flex; flex-direction: column; gap: 18px;">
+  <div class="form-grid">
+    <div class="form-row">
+      <label for="cliente_id">Cliente *</label>
+      <select id="cliente_id" name="cliente_id" required>
+        <option value="">— Seleccioná un cliente —</option>
+        {% for c in clientes %}
+        <option value="{{ c.id }}" {% if form.cliente_id|string == c.id|string %}selected{% endif %}>
+          {{ c.razon_social }}{% if c.localidad %} · {{ c.localidad }}{% endif %}{% if c.cuit_dni %} · {{ format_cuit(c.cuit_dni) }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="condicion_venta">Condición de venta</label>
+      <select id="condicion_venta" name="condicion_venta">
+        <option value="">—</option>
+        <option value="Contado" {% if form.condicion_venta == 'Contado' %}selected{% endif %}>Contado</option>
+        <option value="Cuenta corriente" {% if form.condicion_venta == 'Cuenta corriente' %}selected{% endif %}>Cuenta corriente</option>
+        <option value="Transferencia" {% if form.condicion_venta == 'Transferencia' %}selected{% endif %}>Transferencia</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="forma_pago">Forma de pago</label>
+      <input id="forma_pago" name="forma_pago" type="text" value="{{ form.forma_pago or '' }}"
+             placeholder="ej: Efectivo, transfer, etc." />
+    </div>
+  </div>
+
+  <div>
+    <label style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px;">Items</label>
+    <p style="font-size: 12px; color: var(--muted); margin: 6px 0 10px;">
+      Tipeá un SKU del catálogo y se autocompletan título y precio. Si tipeás un SKU que no existe (o lo dejás vacío), la línea queda como <strong>línea libre</strong> — descripción y precio manuales, no afecta stock.
+    </p>
+    <div class="card" style="padding: 0; overflow-x: auto;">
+      <table class="items-table">
+        <thead>
+          <tr>
+            <th class="col-sku">SKU</th>
+            <th>Descripción</th>
+            <th class="col-cant">Cant.</th>
+            <th class="col-precio">P. Unit.</th>
+            <th class="col-desc">Desc.%</th>
+            <th class="col-subtotal">Subtotal</th>
+            <th class="col-borrar"></th>
+          </tr>
+        </thead>
+        <tbody id="items-body">
+          {# Una fila inicial vacía #}
+          <tr class="item-row">
+            <td><input type="text" name="item_sku" class="sku-input" autocomplete="off" /></td>
+            <td><input type="text" name="item_descripcion" class="desc-input" required /></td>
+            <td><input type="number" name="item_cantidad" class="cant-input" min="1" step="1" value="1" required /></td>
+            <td><input type="number" name="item_precio" class="precio-input" min="0" step="0.01" value="0" required /></td>
+            <td><input type="number" name="item_descuento" class="desc-pc-input" min="0" max="100" step="0.1" value="0" /></td>
+            <td class="col-subtotal subtotal-cell">$0,00</td>
+            <td class="col-borrar"><button type="button" class="btn-row-del" onclick="removeRow(this)">×</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="totals-block">
+        <button type="button" class="btn btn-ghost" onclick="addRow()">+ Agregar item</button>
+        <div style="display: flex; gap: 18px; align-items: center;">
+          <span style="font-size: 12px; color: var(--muted);">Subtotal: <span id="subtotal-display">$0,00</span></span>
+          <span class="total">Total: <span id="total-display">$0,00</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-grid">
+    <div class="form-row">
+      <label for="descuento_general">Descuento general ($)</label>
+      <input id="descuento_general" name="descuento_general" type="number" min="0" step="0.01" value="{{ form.descuento_general or 0 }}" oninput="recalcTotales()" />
+    </div>
+  </div>
+
+  <div class="form-row">
+    <label for="observaciones">Observaciones</label>
+    <textarea id="observaciones" name="observaciones" rows="3"
+              placeholder="Cualquier nota interna del remito">{{ form.observaciones or '' }}</textarea>
+  </div>
+
+  <div class="form-actions">
+    <a href="/remitos" class="btn btn-ghost">Cancelar</a>
+    <button type="submit" class="btn">Crear remito</button>
+  </div>
+</form>
+
+<script>
+// Template de fila para "Agregar item"
+const ROW_TEMPLATE = `
+  <tr class="item-row">
+    <td><input type="text" name="item_sku" class="sku-input" autocomplete="off" /></td>
+    <td><input type="text" name="item_descripcion" class="desc-input" required /></td>
+    <td><input type="number" name="item_cantidad" class="cant-input" min="1" step="1" value="1" required /></td>
+    <td><input type="number" name="item_precio" class="precio-input" min="0" step="0.01" value="0" required /></td>
+    <td><input type="number" name="item_descuento" class="desc-pc-input" min="0" max="100" step="0.1" value="0" /></td>
+    <td class="col-subtotal subtotal-cell">$0,00</td>
+    <td class="col-borrar"><button type="button" class="btn-row-del" onclick="removeRow(this)">×</button></td>
+  </tr>
+`;
+
+function addRow() {
+  const tbody = document.getElementById('items-body');
+  const tmp = document.createElement('tbody');
+  tmp.innerHTML = ROW_TEMPLATE.trim();
+  const newRow = tmp.firstChild;
+  tbody.appendChild(newRow);
+  attachRowHandlers(newRow);
+  newRow.querySelector('.sku-input').focus();
+}
+
+function removeRow(btn) {
+  const tbody = document.getElementById('items-body');
+  if (tbody.querySelectorAll('.item-row').length <= 1) return;  // siempre dejar 1
+  btn.closest('.item-row').remove();
+  recalcTotales();
+}
+
+function fmt(v) {
+  // Formato $1.234,56 (estilo argentino)
+  return '$' + v.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+function recalcRow(row) {
+  const cant = parseFloat(row.querySelector('.cant-input').value) || 0;
+  const precio = parseFloat(row.querySelector('.precio-input').value) || 0;
+  const descPc = parseFloat(row.querySelector('.desc-pc-input').value) || 0;
+  const sub = cant * precio * (1 - descPc / 100);
+  row.querySelector('.subtotal-cell').textContent = fmt(sub);
+  return sub;
+}
+
+function recalcTotales() {
+  let subtotal = 0;
+  document.querySelectorAll('.item-row').forEach(row => {
+    subtotal += recalcRow(row);
+  });
+  const descGen = parseFloat(document.getElementById('descuento_general').value) || 0;
+  document.getElementById('subtotal-display').textContent = fmt(subtotal);
+  document.getElementById('total-display').textContent = fmt(Math.max(0, subtotal - descGen));
+}
+
+async function lookupSku(input) {
+  const sku = input.value.trim();
+  const row = input.closest('.item-row');
+  const descInput = row.querySelector('.desc-input');
+  const precioInput = row.querySelector('.precio-input');
+  if (!sku) {
+    return;
+  }
+  try {
+    const resp = await fetch(`/api/productos/lookup?sku=${encodeURIComponent(sku)}`);
+    if (resp.ok) {
+      const data = await resp.json();
+      // Solo autocompletar si los campos están vacíos (no pisar lo que el user puso)
+      if (!descInput.value) descInput.value = data.titulo || '';
+      if (!precioInput.value || parseFloat(precioInput.value) === 0) {
+        precioInput.value = data.precio_final || 0;
+      }
+      input.style.borderColor = '#86efac';
+      recalcTotales();
+    } else {
+      // SKU no existe → es línea libre
+      input.style.borderColor = '#fcd34d';
+    }
+  } catch (e) {
+    console.error('lookup failed', e);
+  }
+}
+
+function attachRowHandlers(row) {
+  row.querySelector('.sku-input').addEventListener('blur', e => lookupSku(e.target));
+  ['cant-input', 'precio-input', 'desc-pc-input'].forEach(cls => {
+    row.querySelector('.' + cls).addEventListener('input', recalcTotales);
+  });
+}
+
+document.querySelectorAll('.item-row').forEach(attachRowHandlers);
+recalcTotales();
+</script>
+{% endblock %}

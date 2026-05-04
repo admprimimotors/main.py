@@ -285,6 +285,177 @@ class Cliente(Base):
         return f"<Cliente id={self.id} razon_social={self.razon_social!r}>"
 
 
+class Remito(Base):
+    """
+    Remito de venta. Documento que acompaña la entrega de mercadería al cliente.
+    Al crearlo, se descuenta automáticamente el stock de los productos del catálogo
+    que estén linkeados (los items "línea libre" no afectan stock).
+    Al anularlo, el stock se reincorpora.
+    """
+    __tablename__ = "remitos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Número correlativo legible (ej: 1494). Único, asignado al crear.
+    numero: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+
+    cliente_id: Mapped[int] = mapped_column(
+        ForeignKey("clientes.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+
+    fecha: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    condicion_venta: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    forma_pago: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+
+    # Totales en pesos
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+    descuento_general: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+    total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+
+    observaciones: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    estado: Mapped[str] = mapped_column(String(20), default="emitido", nullable=False, index=True)
+    fecha_anulacion: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    motivo_anulacion: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    items: Mapped[list["RemitoItem"]] = relationship(
+        back_populates="remito",
+        cascade="all, delete-orphan",
+        order_by="RemitoItem.orden",
+    )
+    cliente: Mapped["Cliente"] = relationship()
+
+    def __repr__(self) -> str:
+        return f"<Remito numero={self.numero} cliente_id={self.cliente_id} total={self.total}>"
+
+
+class RemitoItem(Base):
+    __tablename__ = "remito_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    remito_id: Mapped[int] = mapped_column(
+        ForeignKey("remitos.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Si producto_id es NULL, es una línea libre (producto no del catálogo).
+    producto_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("productos.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Snapshot de SKU + descripción al momento del remito (sobrevive si se borra
+    # el producto del catálogo después).
+    sku: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    descripcion: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    cantidad: Mapped[int] = mapped_column(Integer, nullable=False)
+    precio_unitario: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+    descuento_porc: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=Decimal("0"), nullable=False)
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+
+    orden: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    es_linea_libre: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    remito: Mapped["Remito"] = relationship(back_populates="items")
+
+
+class NotaCredito(Base):
+    """
+    Nota de crédito. Documento que acredita un saldo a favor del cliente
+    (devolución, bonificación, error de facturación, etc.).
+    Al crearla, el stock de los productos del catálogo se SUMA
+    (se reincorporan unidades). Al anularla, se resta de nuevo.
+
+    Puede o no estar linkeada a un Remito de origen (algunas NC son
+    sin remito previo, ej. ajustes).
+    """
+    __tablename__ = "notas_credito"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    numero: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+
+    cliente_id: Mapped[int] = mapped_column(
+        ForeignKey("clientes.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+
+    fecha: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    motivo: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    # Remito de origen opcional (algunas NC se emiten sin remito previo)
+    remito_origen_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("remitos.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+    descuento_general: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+    total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+
+    observaciones: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    estado: Mapped[str] = mapped_column(String(20), default="emitida", nullable=False, index=True)
+    fecha_anulacion: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    motivo_anulacion: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    items: Mapped[list["NotaCreditoItem"]] = relationship(
+        back_populates="nota_credito",
+        cascade="all, delete-orphan",
+        order_by="NotaCreditoItem.orden",
+    )
+    cliente: Mapped["Cliente"] = relationship()
+    remito_origen: Mapped[Optional["Remito"]] = relationship(foreign_keys=[remito_origen_id])
+
+
+class NotaCreditoItem(Base):
+    __tablename__ = "nota_credito_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    nc_id: Mapped[int] = mapped_column(
+        ForeignKey("notas_credito.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    producto_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("productos.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    sku: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    descripcion: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    cantidad: Mapped[int] = mapped_column(Integer, nullable=False)
+    precio_unitario: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+    descuento_porc: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=Decimal("0"), nullable=False)
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), nullable=False)
+
+    orden: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    es_linea_libre: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    nota_credito: Mapped["NotaCredito"] = relationship(back_populates="items")
+
+
 class MLToken(Base):
     """
     Singleton (id=1) — guarda el refresh_token de Mercado Libre.
