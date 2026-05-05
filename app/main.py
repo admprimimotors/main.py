@@ -1848,7 +1848,18 @@ def remitos_view(
     estado: str = "",
     page: int = 1,
 ):
-    rem_list, total = remitos.list_remitos(db, search=q, estado=estado, page=page)
+    try:
+        rem_list, total = remitos.list_remitos(db, search=q, estado=estado, page=page)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        # Mostrar el error específico al usuario en lugar de un 500 mudo
+        return HTMLResponse(
+            f"<pre style='padding:20px;background:#0b0b0b;color:#fca5a5;font-family:monospace;'>"
+            f"Error en /remitos:\n\n{type(e).__name__}: {e}\n\n"
+            f"{traceback.format_exc()}</pre>",
+            status_code=500,
+        )
     flash = request.session.pop("flash", None)
     return templates.TemplateResponse(
         request,

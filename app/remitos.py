@@ -343,21 +343,11 @@ def list_remitos(
     page = max(1, page)
     base_q = base_q.order_by(Remito.numero.desc()).limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE)
 
+    # Eager-load de items en la misma pasada (selectinload sobre Remito.items)
+    base_q = base_q.options(selectinload(Remito.items))
+
     rows: list[dict] = []
-    # Cargar remitos con sus items en una sola query (eager load para el preview)
-    remito_ids = [r[0].id for r in db.execute(base_q).all()]
-    if not remito_ids:
-        return [], total
-
-    full_remitos = db.execute(
-        select(Remito, Cliente.razon_social)
-        .join(Cliente, Cliente.id == Remito.cliente_id)
-        .where(Remito.id.in_(remito_ids))
-        .options(selectinload(Remito.items))
-        .order_by(Remito.numero.desc())
-    ).all()
-
-    for remito, cliente_name in full_remitos:
+    for remito, cliente_name in db.execute(base_q).all():
         rows.append({
             "id": remito.id,
             "numero": remito.numero,
