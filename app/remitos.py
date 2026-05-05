@@ -309,15 +309,15 @@ def list_remitos(
 ) -> tuple[list[dict], int]:
     """
     Lista remitos con filtros y paginación.
-    Devuelve (lista_de_dicts_con_cliente, total).
+    Devuelve (lista_de_dicts_con_cliente_e_items, total).
+
+    Estrategia: select sobre Remito solo (no multi-entity) + eager load de
+    items y cliente vía selectinload. El cliente_razon_social se accede vía
+    relationship en el loop.
     """
-    base_q = (
-        select(Remito, Cliente.razon_social)
-        .join(Cliente, Cliente.id == Remito.cliente_id)
-    )
-    count_q = select(sql_func.count(Remito.id)).join(
-        Cliente, Cliente.id == Remito.cliente_id
-    )
+    base_q = select(Remito)
+    count_q = select(sql_func.count(Remito.id))
+    needs_join = False
 
     extra_conds = []
     if search and search.strip():
@@ -328,12 +328,18 @@ def list_remitos(
                 Remito.numero == num_int,
                 Cliente.razon_social.ilike(like),
             ))
+            needs_join = True
         except ValueError:
             extra_conds.append(Cliente.razon_social.ilike(like))
+            needs_join = True
     if cliente_id is not None:
         extra_conds.append(Remito.cliente_id == cliente_id)
     if estado in ("emitido", "anulado"):
         extra_conds.append(Remito.estado == estado)
+
+    if needs_join:
+        base_q = base_q.join(Cliente, Cliente.id == Remito.cliente_id)
+        count_q = count_q.join(Cliente, Cliente.id == Remito.cliente_id)
 
     for cond in extra_conds:
         base_q = base_q.where(cond)
@@ -341,19 +347,23 @@ def list_remitos(
 
     total = int(db.execute(count_q).scalar() or 0)
     page = max(1, page)
-    base_q = base_q.order_by(Remito.numero.desc()).limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE)
 
-    # Eager-load de items en la misma pasada (selectinload sobre Remito.items)
-    base_q = base_q.options(selectinload(Remito.items))
+    base_q = (
+        base_q
+        .options(selectinload(Remito.items), selectinload(Remito.cliente))
+        .order_by(Remito.numero.desc())
+        .limit(PAGE_SIZE)
+        .offset((page - 1) * PAGE_SIZE)
+    )
 
     rows: list[dict] = []
-    for remito, cliente_name in db.execute(base_q).all():
+    for remito in db.execute(base_q).scalars().all():
         rows.append({
             "id": remito.id,
             "numero": remito.numero,
             "fecha": remito.fecha,
             "cliente_id": remito.cliente_id,
-            "cliente_razon_social": cliente_name,
+            "cliente_razon_social": remito.cliente.razon_social if remito.cliente else "",
             "subtotal": remito.subtotal,
             "descuento_general": remito.descuento_general,
             "total": remito.total,

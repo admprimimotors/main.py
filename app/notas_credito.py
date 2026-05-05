@@ -215,13 +215,9 @@ def list_ncs(
     estado: str = "",
     page: int = 1,
 ) -> tuple[list[dict], int]:
-    base_q = (
-        select(NotaCredito, Cliente.razon_social)
-        .join(Cliente, Cliente.id == NotaCredito.cliente_id)
-    )
-    count_q = select(sql_func.count(NotaCredito.id)).join(
-        Cliente, Cliente.id == NotaCredito.cliente_id
-    )
+    base_q = select(NotaCredito)
+    count_q = select(sql_func.count(NotaCredito.id))
+    needs_join = False
 
     extra_conds = []
     if search and search.strip():
@@ -232,12 +228,18 @@ def list_ncs(
                 NotaCredito.numero == num_int,
                 Cliente.razon_social.ilike(like),
             ))
+            needs_join = True
         except ValueError:
             extra_conds.append(Cliente.razon_social.ilike(like))
+            needs_join = True
     if cliente_id is not None:
         extra_conds.append(NotaCredito.cliente_id == cliente_id)
     if estado in ("emitida", "anulada"):
         extra_conds.append(NotaCredito.estado == estado)
+
+    if needs_join:
+        base_q = base_q.join(Cliente, Cliente.id == NotaCredito.cliente_id)
+        count_q = count_q.join(Cliente, Cliente.id == NotaCredito.cliente_id)
 
     for cond in extra_conds:
         base_q = base_q.where(cond)
@@ -245,16 +247,22 @@ def list_ncs(
 
     total = int(db.execute(count_q).scalar() or 0)
     page = max(1, page)
-    base_q = base_q.order_by(NotaCredito.numero.desc()).limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE)
+    base_q = (
+        base_q
+        .options(selectinload(NotaCredito.cliente))
+        .order_by(NotaCredito.numero.desc())
+        .limit(PAGE_SIZE)
+        .offset((page - 1) * PAGE_SIZE)
+    )
 
     rows: list[dict] = []
-    for nc, cliente_name in db.execute(base_q).all():
+    for nc in db.execute(base_q).scalars().all():
         rows.append({
             "id": nc.id,
             "numero": nc.numero,
             "fecha": nc.fecha,
             "cliente_id": nc.cliente_id,
-            "cliente_razon_social": cliente_name,
+            "cliente_razon_social": nc.cliente.razon_social if nc.cliente else "",
             "motivo": nc.motivo,
             "remito_origen_id": nc.remito_origen_id,
             "subtotal": nc.subtotal,
