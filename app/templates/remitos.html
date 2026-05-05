@@ -91,7 +91,7 @@
         <td onclick="location.href='/remitos/{{ r.id }}'" class="clickable"><span class="numero">{{ "{:04d}".format(r.numero) }}</span></td>
         <td onclick="location.href='/remitos/{{ r.id }}'" class="clickable">{{ r.fecha.strftime('%d/%m/%Y') if r.fecha else '—' }}</td>
         <td onclick="location.href='/remitos/{{ r.id }}'" class="clickable">{{ r.cliente_razon_social }}</td>
-        <td onclick="location.href='/remitos/{{ r.id }}'" class="num clickable">{{ r.items|length }}</td>
+        <td onclick="location.href='/remitos/{{ r.id }}'" class="num clickable">{{ r.lineas|length }}</td>
         <td onclick="location.href='/remitos/{{ r.id }}'" class="num clickable"><strong>${{ "{:,.0f}".format(r.total|float) }}</strong></td>
         <td onclick="location.href='/remitos/{{ r.id }}'" class="clickable">
           {% if r.estado == 'emitido' %}<span class="badge-success">Emitido</span>
@@ -105,7 +105,7 @@
       <tr id="preview-{{ r.id }}" class="preview-row" style="display: none;">
         <td colspan="8">
           <div class="preview-content">
-            {% if r.items %}
+            {% if r.lineas %}
             <table class="preview-items">
               <thead>
                 <tr>
@@ -117,7 +117,7 @@
                 </tr>
               </thead>
               <tbody>
-                {% for it in r.items %}
+                {% for it in r.lineas %}
                 <tr>
                   <td>{% if it.sku %}<code>{{ it.sku }}</code>{% if it.es_linea_libre %} <span style="font-size: 9px; color: var(--muted);">(libre)</span>{% endif %}{% else %}<span style="font-size: 9px; color: var(--muted);">(libre)</span>{% endif %}</td>
                   <td>{{ it.descripcion }}</td>

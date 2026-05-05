@@ -358,6 +358,8 @@ def list_remitos(
 
     rows: list[dict] = []
     for remito in db.execute(base_q).scalars().all():
+        # Clave "lineas" en vez de "items" porque en Jinja `obj.items` choca
+        # con el método dict.items() y devuelve el bound method en vez del valor.
         rows.append({
             "id": remito.id,
             "numero": remito.numero,
@@ -368,7 +370,7 @@ def list_remitos(
             "descuento_general": remito.descuento_general,
             "total": remito.total,
             "estado": remito.estado,
-            "items": [
+            "lineas": [
                 {
                     "sku": it.sku,
                     "descripcion": it.descripcion,
