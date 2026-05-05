@@ -42,7 +42,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.24.1"
+APP_VERSION = "0.24.2"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1850,33 +1850,33 @@ def remitos_view(
 ):
     try:
         rem_list, total = remitos.list_remitos(db, search=q, estado=estado, page=page)
+        flash = request.session.pop("flash", None)
+        return templates.TemplateResponse(
+            request,
+            "remitos.html",
+            {
+                "user": user,
+                "active": "remitos",
+                "version": APP_VERSION,
+                "remitos": rem_list,
+                "total": total,
+                "search": q,
+                "estado": estado,
+                "page": page,
+                "page_size": remitos.PAGE_SIZE,
+                "flash": flash,
+            },
+        )
     except Exception as e:
         import traceback
+        tb = traceback.format_exc()
         traceback.print_exc()
-        # Mostrar el error específico al usuario en lugar de un 500 mudo
         return HTMLResponse(
-            f"<pre style='padding:20px;background:#0b0b0b;color:#fca5a5;font-family:monospace;'>"
-            f"Error en /remitos:\n\n{type(e).__name__}: {e}\n\n"
-            f"{traceback.format_exc()}</pre>",
+            f"<pre style='padding:20px;background:#0b0b0b;color:#fca5a5;font-family:monospace;white-space:pre-wrap;'>"
+            f"Error en /remitos (v{APP_VERSION}):\n\n"
+            f"{type(e).__name__}: {e}\n\n{tb}</pre>",
             status_code=500,
         )
-    flash = request.session.pop("flash", None)
-    return templates.TemplateResponse(
-        request,
-        "remitos.html",
-        {
-            "user": user,
-            "active": "remitos",
-            "version": APP_VERSION,
-            "remitos": rem_list,
-            "total": total,
-            "search": q,
-            "estado": estado,
-            "page": page,
-            "page_size": remitos.PAGE_SIZE,
-            "flash": flash,
-        },
-    )
 
 
 @app.get("/remitos/nuevo", response_class=HTMLResponse)
@@ -2084,24 +2084,35 @@ def ncs_view(
     estado: str = "",
     page: int = 1,
 ):
-    nc_list, total = notas_credito.list_ncs(db, search=q, estado=estado, page=page)
-    flash = request.session.pop("flash", None)
-    return templates.TemplateResponse(
-        request,
-        "notas_credito.html",
-        {
-            "user": user,
-            "active": "notas_credito",
-            "version": APP_VERSION,
-            "ncs": nc_list,
-            "total": total,
-            "search": q,
-            "estado": estado,
-            "page": page,
-            "page_size": notas_credito.PAGE_SIZE,
-            "flash": flash,
-        },
-    )
+    try:
+        nc_list, total = notas_credito.list_ncs(db, search=q, estado=estado, page=page)
+        flash = request.session.pop("flash", None)
+        return templates.TemplateResponse(
+            request,
+            "notas_credito.html",
+            {
+                "user": user,
+                "active": "notas_credito",
+                "version": APP_VERSION,
+                "ncs": nc_list,
+                "total": total,
+                "search": q,
+                "estado": estado,
+                "page": page,
+                "page_size": notas_credito.PAGE_SIZE,
+                "flash": flash,
+            },
+        )
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        traceback.print_exc()
+        return HTMLResponse(
+            f"<pre style='padding:20px;background:#0b0b0b;color:#fca5a5;font-family:monospace;white-space:pre-wrap;'>"
+            f"Error en /notas-credito (v{APP_VERSION}):\n\n"
+            f"{type(e).__name__}: {e}\n\n{tb}</pre>",
+            status_code=500,
+        )
 
 
 @app.get("/notas-credito/nuevo", response_class=HTMLResponse)
