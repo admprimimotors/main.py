@@ -129,12 +129,16 @@
 </div>
 {% endif %}
 
-{% if nc.estado == 'emitida' %}
 <div class="card" style="margin-bottom: 22px;">
   <div class="card-title">Acciones</div>
-  <p style="font-size: 13px; color: var(--muted); margin: 0 0 14px;"><em>PDF: pendiente para próxima sesión.</em></p>
+  <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px;">
+    <a href="/notas-credito/{{ nc.id }}/pdf" target="_blank" rel="noopener" class="btn">
+      📄 Ver / descargar PDF
+    </a>
+  </div>
+  {% if nc.estado == 'emitida' %}
   <form method="post" action="/notas-credito/{{ nc.id }}/anular"
-        style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;"
+        style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding-top: 14px; border-top: 1px solid var(--border-soft);"
         onsubmit="return confirm('¿Anular esta NC? El stock que se sumó al crearla volverá a restarse.');">
     <input type="text" name="motivo" placeholder="Motivo de la anulación (opcional)"
            style="flex: 1 1 240px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; outline: none;" />
@@ -142,12 +146,12 @@
       🚫 Anular NC
     </button>
   </form>
+  {% else %}
+  <div class="alert alert-warning" style="margin: 0;">
+    <strong>Anulada</strong> el {{ nc.fecha_anulacion.strftime('%d/%m/%Y %H:%M') if nc.fecha_anulacion else '—' }}.
+    {% if nc.motivo_anulacion %}Motivo: {{ nc.motivo_anulacion }}.{% endif %}
+    El stock fue revertido (vuelto a restar).
+  </div>
+  {% endif %}
 </div>
-{% else %}
-<div class="alert alert-warning">
-  <strong>Anulada</strong> el {{ nc.fecha_anulacion.strftime('%d/%m/%Y %H:%M') if nc.fecha_anulacion else '—' }}.
-  {% if nc.motivo_anulacion %}Motivo: {{ nc.motivo_anulacion }}.{% endif %}
-  El stock fue revertido (vuelto a restar).
-</div>
-{% endif %}
 {% endblock %}

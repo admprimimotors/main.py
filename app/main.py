@@ -42,7 +42,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.23.0"
+APP_VERSION = "0.24.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1996,9 +1996,68 @@ def remito_anular(
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
-    ok, msg = remitos.anular_remito(db, remito_id, motivo=motivo)
+    """Anular remito → genera NC automática con los mismos items + redirige a la NC."""
+    try:
+        ok, msg, nc_id = remitos.anular_remito(db, remito_id, motivo=motivo)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error al anular: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse(f"/remitos/{remito_id}", status_code=303)
+
     request.session["flash"] = {"type": "success" if ok else "error", "msg": msg}
+    if ok and nc_id:
+        return RedirectResponse(f"/notas-credito/{nc_id}", status_code=303)
     return RedirectResponse(f"/remitos/{remito_id}", status_code=303)
+
+
+@app.get("/remitos/{remito_id:int}/pdf")
+def remito_pdf(
+    remito_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Devuelve el PDF del remito como descarga inline."""
+    from . import pdf_generator
+    remito = remitos.get_remito(db, remito_id)
+    if remito is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    pdf_bytes = pdf_generator.generate_remito_pdf(remito)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="remito_{remito.numero:07d}.pdf"',
+        },
+    )
+
+
+@app.get("/notas-credito/{nc_id:int}/pdf")
+def nc_pdf(
+    nc_id: int,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Devuelve el PDF de la NC como descarga inline."""
+    from . import pdf_generator
+    nc = notas_credito.get_nc(db, nc_id)
+    if nc is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    pdf_bytes = pdf_generator.generate_nc_pdf(nc)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="nc_{nc.numero:07d}.pdf"',
+        },
+    )
 
 
 # ===============================================================
@@ -2037,11 +2096,43 @@ def ncs_view(
 @app.get("/notas-credito/nuevo", response_class=HTMLResponse)
 def ncs_nuevo_form(
     request: Request,
+    from_remito_id: Optional[int] = None,
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
+    """
+    Form para crear una NC. Si se pasa ?from_remito_id=X, pre-carga el cliente
+    + items del remito de origen para no tener que tipear de nuevo.
+    """
     flash = request.session.pop("flash", None)
     form = request.session.pop("nc_form_draft", None) or {}
+    items_preload: list[dict] = []
+
+    if from_remito_id and not form:
+        # Pre-cargar desde el remito si lo piden y no hay un draft previo
+        remito = remitos.get_remito(db, from_remito_id)
+        if remito is not None:
+            form = {
+                "cliente_id": remito.cliente_id,
+                "remito_origen_id": remito.id,
+                "motivo": "Devolución",
+                "descuento_general": float(remito.descuento_general or 0),
+                "observaciones": f"NC sobre remito Nº {remito.numero}.",
+            }
+            for it in remito.items:
+                items_preload.append({
+                    "sku": it.sku or "",
+                    "descripcion": it.descripcion,
+                    "cantidad": it.cantidad,
+                    "precio_unitario": float(it.precio_unitario or 0),
+                    "descuento_porc": float(it.descuento_porc or 0),
+                })
+        else:
+            request.session["flash"] = {
+                "type": "warning",
+                "msg": f"No se encontró el remito ID {from_remito_id} para pre-cargar.",
+            }
+
     return templates.TemplateResponse(
         request,
         "nota_credito_nuevo.html",
@@ -2053,6 +2144,7 @@ def ncs_nuevo_form(
             "proximo_numero": notas_credito.next_nc_numero(db),
             "motivos": notas_credito.MOTIVOS_NC,
             "form": form,
+            "items_preload": items_preload,
             "flash": flash,
         },
     )

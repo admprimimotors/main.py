@@ -100,15 +100,29 @@
           </tr>
         </thead>
         <tbody id="items-body">
-          <tr class="item-row">
-            <td><input type="text" name="item_sku" class="sku-input" autocomplete="off" /></td>
-            <td><input type="text" name="item_descripcion" class="desc-input" required /></td>
-            <td><input type="number" name="item_cantidad" class="cant-input" min="1" step="1" value="1" required /></td>
-            <td><input type="number" name="item_precio" class="precio-input" min="0" step="0.01" value="0" required /></td>
-            <td><input type="number" name="item_descuento" class="desc-pc-input" min="0" max="100" step="0.1" value="0" /></td>
-            <td class="col-subtotal subtotal-cell">$0,00</td>
-            <td class="col-borrar"><button type="button" class="btn-row-del" onclick="removeRow(this)">×</button></td>
-          </tr>
+          {% if items_preload %}
+            {% for it in items_preload %}
+            <tr class="item-row">
+              <td><input type="text" name="item_sku" class="sku-input" autocomplete="off" value="{{ it.sku }}" /></td>
+              <td><input type="text" name="item_descripcion" class="desc-input" value="{{ it.descripcion }}" required /></td>
+              <td><input type="number" name="item_cantidad" class="cant-input" min="1" step="1" value="{{ it.cantidad }}" required /></td>
+              <td><input type="number" name="item_precio" class="precio-input" min="0" step="0.01" value="{{ it.precio_unitario }}" required /></td>
+              <td><input type="number" name="item_descuento" class="desc-pc-input" min="0" max="100" step="0.1" value="{{ it.descuento_porc }}" /></td>
+              <td class="col-subtotal subtotal-cell">$0,00</td>
+              <td class="col-borrar"><button type="button" class="btn-row-del" onclick="removeRow(this)">×</button></td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr class="item-row">
+              <td><input type="text" name="item_sku" class="sku-input" autocomplete="off" /></td>
+              <td><input type="text" name="item_descripcion" class="desc-input" required /></td>
+              <td><input type="number" name="item_cantidad" class="cant-input" min="1" step="1" value="1" required /></td>
+              <td><input type="number" name="item_precio" class="precio-input" min="0" step="0.01" value="0" required /></td>
+              <td><input type="number" name="item_descuento" class="desc-pc-input" min="0" max="100" step="0.1" value="0" /></td>
+              <td class="col-subtotal subtotal-cell">$0,00</td>
+              <td class="col-borrar"><button type="button" class="btn-row-del" onclick="removeRow(this)">×</button></td>
+            </tr>
+          {% endif %}
         </tbody>
       </table>
       <div class="totals-block">

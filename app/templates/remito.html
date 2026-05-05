@@ -122,27 +122,38 @@
 </div>
 {% endif %}
 
-{% if remito.estado == 'emitido' %}
 <div class="card" style="margin-bottom: 22px;">
   <div class="card-title">Acciones</div>
-  <p style="font-size: 13px; color: var(--muted); margin: 0 0 14px;">
-    <em>PDF: pendiente para próxima sesión (port del pdf.py viejo).</em>
-  </p>
+  <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px;">
+    <a href="/remitos/{{ remito.id }}/pdf" target="_blank" rel="noopener" class="btn">
+      📄 Ver / descargar PDF
+    </a>
+    <a href="/notas-credito/nuevo?from_remito_id={{ remito.id }}" class="btn btn-ghost">
+      📝 Crear NC desde este remito
+    </a>
+  </div>
+
+  {% if remito.estado == 'emitido' %}
   <form method="post" action="/remitos/{{ remito.id }}/anular"
-        style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;"
-        onsubmit="return confirm('¿Anular este remito? Se va a reincorporar el stock de los items con producto del catálogo.');">
+        style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding-top: 14px; border-top: 1px solid var(--border-soft);"
+        onsubmit="return confirm('¿Anular este remito? Va a generarse automáticamente una NC con los mismos items, que reincorporará el stock al catálogo.');">
     <input type="text" name="motivo" placeholder="Motivo de la anulación (opcional)"
            style="flex: 1 1 240px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; outline: none;" />
     <button type="submit" style="background: rgba(239,68,68,.18); color: #fca5a5; border: 1px solid rgba(239,68,68,.40); border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer;">
-      🚫 Anular remito
+      🚫 Anular y generar NC
     </button>
   </form>
+  <p style="font-size: 12px; color: var(--muted); margin: 8px 0 0;">
+    Anular el remito genera una <strong>NC espejo</strong> con los mismos items.
+    La NC es la que reincorpora el stock — vas a poder verla y descargarla en su propio PDF.
+  </p>
+  {% else %}
+  <div class="alert alert-warning" style="margin: 0;">
+    <strong>Anulado</strong> el {{ remito.fecha_anulacion.strftime('%d/%m/%Y %H:%M') if remito.fecha_anulacion else '—' }}.
+    {% if remito.motivo_anulacion %}Motivo: {{ remito.motivo_anulacion }}.{% endif %}
+    Se generó una NC espejo que reincorporó el stock — buscala filtrando por este cliente en
+    <a href="/notas-credito" style="color: inherit; text-decoration: underline;">/notas-credito</a>.
+  </div>
+  {% endif %}
 </div>
-{% else %}
-<div class="alert alert-warning">
-  <strong>Anulado</strong> el {{ remito.fecha_anulacion.strftime('%d/%m/%Y %H:%M') if remito.fecha_anulacion else '—' }}.
-  {% if remito.motivo_anulacion %}Motivo: {{ remito.motivo_anulacion }}.{% endif %}
-  El stock fue reincorporado al catálogo.
-</div>
-{% endif %}
 {% endblock %}

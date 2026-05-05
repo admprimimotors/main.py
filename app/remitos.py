@@ -226,33 +226,65 @@ def anular_remito(
     db: Session,
     remito_id: int,
     motivo: Optional[str] = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Optional[int]]:
     """
-    Anula un remito y reincorpora el stock de los items con producto.
-    Devuelve (ok, mensaje).
+    Anula un remito y AUTOMÁTICAMENTE genera una Nota de Crédito espejo con
+    los mismos items linkeada a este remito. La NC es la que reincorpora el
+    stock — anular_remito en sí no toca stock para no duplicar el efecto.
+
+    Devuelve (ok, mensaje, nc_id_o_None). El nc_id permite al caller redirigir
+    al detalle de la NC creada.
     """
     remito = db.execute(
         select(Remito).where(Remito.id == remito_id).options(selectinload(Remito.items))
     ).scalar_one_or_none()
     if remito is None:
-        return False, f"No existe el remito ID {remito_id}"
+        return False, f"No existe el remito ID {remito_id}", None
     if remito.estado == "anulado":
-        return False, f"El remito {remito.numero} ya está anulado"
+        return False, f"El remito {remito.numero} ya está anulado", None
 
-    for it in remito.items:
-        if it.producto_id is not None:
-            prod = db.execute(
-                select(Producto).where(Producto.id == it.producto_id)
-            ).scalar_one_or_none()
-            if prod is not None:
-                prod.stock_actual = prod.stock_actual + it.cantidad
-
+    # Marcar el remito como anulado
     remito.estado = "anulado"
     remito.fecha_anulacion = datetime.now(timezone.utc)
     remito.motivo_anulacion = (motivo or "").strip() or None
 
-    db.commit()
-    return True, f"✓ Remito {remito.numero} anulado, stock reincorporado"
+    # Generar la NC con los items del remito.
+    # Import lazy para evitar import circular (notas_credito importa de remitos).
+    from . import notas_credito as nc_svc
+
+    items_para_nc = [
+        ItemInput(
+            descripcion=it.descripcion,
+            cantidad=it.cantidad,
+            precio_unitario=it.precio_unitario,
+            descuento_porc=it.descuento_porc,
+            sku=it.sku,
+        )
+        for it in remito.items
+    ]
+
+    # Necesitamos commit del remito anulado antes de crear la NC porque crear_nc
+    # también hace commit. Lo persistimos primero.
+    db.flush()
+
+    nc = nc_svc.crear_nc(
+        db,
+        cliente_id=remito.cliente_id,
+        items=items_para_nc,
+        motivo="Anulación de remito",
+        remito_origen_id=remito.id,
+        descuento_general=remito.descuento_general,
+        observaciones=(
+            f"Generada automáticamente por anulación del remito Nº {remito.numero}. "
+            + (f"Motivo: {motivo}." if motivo else "")
+        ).strip(),
+    )
+
+    return (
+        True,
+        f"✓ Remito {remito.numero} anulado · NC {nc.numero} generada con stock reincorporado",
+        nc.id,
+    )
 
 
 # =============================================================
@@ -312,7 +344,20 @@ def list_remitos(
     base_q = base_q.order_by(Remito.numero.desc()).limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE)
 
     rows: list[dict] = []
-    for remito, cliente_name in db.execute(base_q).all():
+    # Cargar remitos con sus items en una sola query (eager load para el preview)
+    remito_ids = [r[0].id for r in db.execute(base_q).all()]
+    if not remito_ids:
+        return [], total
+
+    full_remitos = db.execute(
+        select(Remito, Cliente.razon_social)
+        .join(Cliente, Cliente.id == Remito.cliente_id)
+        .where(Remito.id.in_(remito_ids))
+        .options(selectinload(Remito.items))
+        .order_by(Remito.numero.desc())
+    ).all()
+
+    for remito, cliente_name in full_remitos:
         rows.append({
             "id": remito.id,
             "numero": remito.numero,
@@ -323,5 +368,16 @@ def list_remitos(
             "descuento_general": remito.descuento_general,
             "total": remito.total,
             "estado": remito.estado,
+            "items": [
+                {
+                    "sku": it.sku,
+                    "descripcion": it.descripcion,
+                    "cantidad": it.cantidad,
+                    "precio_unitario": float(it.precio_unitario or 0),
+                    "subtotal": float(it.subtotal or 0),
+                    "es_linea_libre": it.es_linea_libre,
+                }
+                for it in remito.items
+            ],
         })
     return rows, total

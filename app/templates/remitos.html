@@ -23,6 +23,21 @@
   .data-table tbody tr.anulado { opacity: 0.5; text-decoration: line-through; }
   .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
   .data-table .numero { font-family: ui-monospace, "SF Mono", monospace; color: var(--brand-hover); font-weight: 600; }
+  .preview-toggle {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
+    transition: all .12s;
+  }
+  .preview-toggle:hover { color: var(--text); border-color: var(--brand); }
+  .preview-toggle.open { background: var(--brand-soft); color: var(--brand-hover); border-color: var(--brand); }
+  .preview-row td { background: var(--panel-2); padding: 0 !important; }
+  .preview-content { padding: 14px 18px; }
+  .preview-items { width: 100%; font-size: 12px; }
+  .preview-items td { padding: 5px 8px; border-bottom: 1px solid var(--border-soft); }
+  .preview-items tr:last-child td { border-bottom: none; }
+  .preview-items code { background: var(--panel); padding: 1px 5px; border-radius: 3px; color: var(--brand-hover); font-size: 11px; }
+  .preview-items .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .preview-link { font-size: 11px; color: var(--brand-hover); margin-top: 8px; display: inline-block; }
 
   .badge-success { background: rgba(34,197,94,.14); color: #86efac; padding: 3px 10px; border-radius: 999px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
   .badge-muted { background: var(--panel-2); color: var(--muted); padding: 3px 10px; border-radius: 999px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
@@ -57,28 +72,67 @@
   <table class="data-table">
     <thead>
       <tr>
+        <th style="width: 36px;"></th>
         <th>Nº</th>
         <th>Fecha</th>
         <th>Cliente</th>
-        <th class="num">Subtotal</th>
-        <th class="num">Desc.</th>
+        <th class="num">Items</th>
         <th class="num">Total</th>
         <th>Estado</th>
+        <th style="width: 60px;"></th>
       </tr>
     </thead>
     <tbody>
       {% for r in remitos %}
-      <tr class="clickable {% if r.estado == 'anulado' %}anulado{% endif %}"
-          onclick="location.href='/remitos/{{ r.id }}'">
-        <td><span class="numero">{{ "{:04d}".format(r.numero) }}</span></td>
-        <td>{{ r.fecha.strftime('%d/%m/%Y') if r.fecha else '—' }}</td>
-        <td>{{ r.cliente_razon_social }}</td>
-        <td class="num">${{ "{:,.0f}".format(r.subtotal|float) }}</td>
-        <td class="num">{% if r.descuento_general and r.descuento_general > 0 %}−${{ "{:,.0f}".format(r.descuento_general|float) }}{% else %}—{% endif %}</td>
-        <td class="num"><strong>${{ "{:,.0f}".format(r.total|float) }}</strong></td>
-        <td>
+      <tr class="{% if r.estado == 'anulado' %}anulado{% endif %}">
+        <td onclick="event.stopPropagation();">
+          <button type="button" class="preview-toggle" onclick="togglePreview({{ r.id }}, this)" title="Ver items">▸</button>
+        </td>
+        <td onclick="location.href='/remitos/{{ r.id }}'" class="clickable"><span class="numero">{{ "{:04d}".format(r.numero) }}</span></td>
+        <td onclick="location.href='/remitos/{{ r.id }}'" class="clickable">{{ r.fecha.strftime('%d/%m/%Y') if r.fecha else '—' }}</td>
+        <td onclick="location.href='/remitos/{{ r.id }}'" class="clickable">{{ r.cliente_razon_social }}</td>
+        <td onclick="location.href='/remitos/{{ r.id }}'" class="num clickable">{{ r.items|length }}</td>
+        <td onclick="location.href='/remitos/{{ r.id }}'" class="num clickable"><strong>${{ "{:,.0f}".format(r.total|float) }}</strong></td>
+        <td onclick="location.href='/remitos/{{ r.id }}'" class="clickable">
           {% if r.estado == 'emitido' %}<span class="badge-success">Emitido</span>
           {% else %}<span class="badge-danger">Anulado</span>{% endif %}
+        </td>
+        <td onclick="event.stopPropagation();">
+          <a href="/remitos/{{ r.id }}/pdf" target="_blank" rel="noopener" title="Descargar PDF"
+             style="color: var(--muted); font-size: 16px; text-decoration: none;">📄</a>
+        </td>
+      </tr>
+      <tr id="preview-{{ r.id }}" class="preview-row" style="display: none;">
+        <td colspan="8">
+          <div class="preview-content">
+            {% if r.items %}
+            <table class="preview-items">
+              <thead>
+                <tr>
+                  <th style="text-align: left; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; padding-bottom: 8px;">SKU</th>
+                  <th style="text-align: left; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; padding-bottom: 8px;">Descripción</th>
+                  <th class="num" style="color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; padding-bottom: 8px;">Cant.</th>
+                  <th class="num" style="color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; padding-bottom: 8px;">P. Unit.</th>
+                  <th class="num" style="color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; padding-bottom: 8px;">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for it in r.items %}
+                <tr>
+                  <td>{% if it.sku %}<code>{{ it.sku }}</code>{% if it.es_linea_libre %} <span style="font-size: 9px; color: var(--muted);">(libre)</span>{% endif %}{% else %}<span style="font-size: 9px; color: var(--muted);">(libre)</span>{% endif %}</td>
+                  <td>{{ it.descripcion }}</td>
+                  <td class="num">{{ it.cantidad }}</td>
+                  <td class="num">${{ "{:,.2f}".format(it.precio_unitario) }}</td>
+                  <td class="num"><strong>${{ "{:,.2f}".format(it.subtotal) }}</strong></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            <a href="/remitos/{{ r.id }}" class="preview-link">Ver detalle completo →</a>
+            {% else %}
+            <div style="color: var(--muted); font-size: 12px;">Este remito no tiene items.</div>
+            {% endif %}
+          </div>
         </td>
       </tr>
       {% endfor %}
@@ -103,4 +157,15 @@
   <p>{% if search or estado %}Probá ajustar los filtros.{% else %}Empezá creando uno con <strong>+ Nuevo remito</strong>.{% endif %}</p>
 </div>
 {% endif %}
+
+<script>
+function togglePreview(remitoId, btn) {
+  const row = document.getElementById('preview-' + remitoId);
+  if (!row) return;
+  const isOpen = row.style.display !== 'none';
+  row.style.display = isOpen ? 'none' : 'table-row';
+  btn.classList.toggle('open', !isOpen);
+  btn.textContent = isOpen ? '▸' : '▾';
+}
+</script>
 {% endblock %}
