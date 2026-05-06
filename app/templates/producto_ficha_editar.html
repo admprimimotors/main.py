@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Ficha técnica · {{ producto.titulo }} · Primi Motors{% endblock %}
+{% block page_title %}Editar ficha técnica{% endblock %}
+
+{% block content %}
+<style>
+  .breadcrumb { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .breadcrumb a { color: var(--muted-strong); transition: color .12s; }
+  .breadcrumb a:hover { color: var(--brand-hover); }
+
+  .alert { padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 18px; border: 1px solid; line-height: 1.5; }
+  .alert-success { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.40); color: #86efac; }
+  .alert-warning { background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d; }
+  .alert-error   { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+  .alert code { background: rgba(0,0,0,.25); padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+
+  .ficha-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .ficha-table thead th {
+    text-align: left; padding: 10px; color: var(--muted); font-weight: 500;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+    border-bottom: 1px solid var(--border-soft); background: var(--panel-2);
+  }
+  .ficha-table tbody td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+  .ficha-table input, .ficha-table textarea {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 10px; font-size: 13px; outline: none; width: 100%;
+    font-family: inherit;
+  }
+  .ficha-table textarea { min-height: 28px; max-height: 100px; resize: vertical; }
+  .ficha-table input:focus, .ficha-table textarea:focus { border-color: var(--brand); }
+  .ficha-table .col-key { width: 200px; }
+  .ficha-table .col-ml { width: 70px; text-align: center; }
+  .ficha-table .col-borrar { width: 36px; text-align: center; }
+
+  .ml-link-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: 10px; font-weight: 500;
+    background: rgba(59,130,246,.12); color: #93c5fd;
+    border: 1px solid rgba(59,130,246,.30);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .local-chip {
+    display: inline-flex; align-items: center;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: 10px; color: var(--muted);
+    background: var(--panel-2);
+    border: 1px dashed var(--border);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+
+  .btn-row-del { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 4px; }
+  .btn-row-del:hover { color: #fca5a5; }
+
+  .totals-block {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 14px; padding: 14px 16px;
+    border-top: 1px solid var(--border-soft); background: var(--panel-2);
+  }
+
+  .form-actions {
+    display: flex; gap: 10px; justify-content: flex-end; align-items: center;
+    margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-soft);
+  }
+
+  .helper-text { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 6px 0 14px; }
+  .helper-text code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; color: var(--brand-hover); font-size: 11px; }
+</style>
+
+{% if flash %}<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>{% endif %}
+
+<div class="breadcrumb">
+  <a href="/catalogo/{{ producto.sku|urlencode }}">← Volver al detalle del producto</a>
+</div>
+
+<div class="page-intro">
+  <h2>Ficha técnica</h2>
+  <p style="font-size: 13px; color: var(--muted-strong);">
+    <strong>{{ producto.titulo }}</strong> · SKU <code style="background: var(--panel-2); padding: 2px 8px; border-radius: 4px; color: var(--brand-hover);">{{ producto.sku }}</code>
+  </p>
+</div>
+
+{% if ml_write_enabled %}
+<div class="alert alert-warning">
+  <strong>Sync ML activo:</strong> los atributos marcados <span class="ml-link-chip">↗ ML</span> existen
+  en la publicación de Mercado Libre. Si los modificás, se pushean automáticamente a ML al guardar.
+  Los atributos <span class="local-chip">Local</span> no tienen ID en ML — se guardan solo en la base local.
+</div>
+{% endif %}
+
+<form method="post" action="/catalogo/{{ producto.sku|urlencode }}/ficha" class="card">
+  <p class="helper-text">
+    Cada fila es un atributo. La <strong>clave</strong> se normaliza automáticamente al guardar
+    (lowercase, sin tildes, espacios → guiones bajos). Por ejemplo "Diámetro mm" se guarda como
+    <code>diametro_mm</code>. Los atributos vacíos (sin clave o sin valor) se descartan.
+  </p>
+
+  <div class="card" style="padding: 0; overflow-x: auto;">
+    <table class="ficha-table">
+      <thead>
+        <tr>
+          <th class="col-key">Clave</th>
+          <th>Valor</th>
+          <th class="col-ml">Vínculo ML</th>
+          <th class="col-borrar"></th>
+        </tr>
+      </thead>
+      <tbody id="ficha-body">
+        {% if entries %}
+          {% for entry in entries %}
+          <tr class="ficha-row">
+            <td><input type="text" name="ficha_key" value="{{ entry.key }}" autocomplete="off" /></td>
+            <td><textarea name="ficha_value" rows="1">{{ entry.value }}</textarea></td>
+            <td class="col-ml">
+              {% if entry.is_ml %}
+                <span class="ml-link-chip" title="Existe como atributo en la publicación ML">↗ ML</span>
+              {% else %}
+                <span class="local-chip" title="Solo en la base local, no se pushea a ML">Local</span>
+              {% endif %}
+            </td>
+            <td class="col-borrar"><button type="button" class="btn-row-del" onclick="removeRow(this)" title="Eliminar atributo">×</button></td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr class="ficha-row">
+            <td><input type="text" name="ficha_key" autocomplete="off" placeholder="ej: diametro_mm" /></td>
+            <td><textarea name="ficha_value" rows="1" placeholder="ej: 75"></textarea></td>
+            <td class="col-ml"><span class="local-chip">Local</span></td>
+            <td class="col-borrar"><button type="button" class="btn-row-del" onclick="removeRow(this)">×</button></td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+    <div class="totals-block">
+      <button type="button" class="btn btn-ghost" onclick="addRow()">+ Agregar atributo</button>
+      <span style="font-size: 12px; color: var(--muted);">
+        Atributos cargados: <span id="ficha-count">{{ entries|length if entries else 1 }}</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <a href="/catalogo/{{ producto.sku|urlencode }}" class="btn btn-ghost">Cancelar</a>
+    <button type="submit" class="btn">Guardar ficha técnica</button>
+  </div>
+</form>
+
+<script>
+const ROW_TEMPLATE = `
+  <tr class="ficha-row">
+    <td><input type="text" name="ficha_key" autocomplete="off" placeholder="clave_nueva" /></td>
+    <td><textarea name="ficha_value" rows="1" placeholder="valor"></textarea></td>
+    <td class="col-ml"><span class="local-chip">Local</span></td>
+    <td class="col-borrar"><button type="button" class="btn-row-del" onclick="removeRow(this)">×</button></td>
+  </tr>
+`;
+
+function addRow() {
+  const tbody = document.getElementById('ficha-body');
+  const tmp = document.createElement('tbody');
+  tmp.innerHTML = ROW_TEMPLATE.trim();
+  const newRow = tmp.firstChild;
+  tbody.appendChild(newRow);
+  newRow.querySelector('input[name=ficha_key]').focus();
+  updateCount();
+}
+
+function removeRow(btn) {
+  btn.closest('.ficha-row').remove();
+  updateCount();
+}
+
+function updateCount() {
+  document.getElementById('ficha-count').textContent =
+    document.querySelectorAll('.ficha-row').length;
+}
+</script>
+{% endblock %}

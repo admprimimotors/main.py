@@ -679,7 +679,10 @@
 {% endif %}
 
 <div class="card" style="margin-bottom: 18px;">
-  <div class="card-title">Ficha técnica</div>
+  <div class="card-title" style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+    <span>Ficha técnica</span>
+    <a href="/catalogo/{{ producto.sku|urlencode }}/ficha" class="btn btn-ghost" style="font-size: 12px; padding: 4px 10px;">✎ Editar ficha</a>
+  </div>
   {% if producto.ficha_tecnica %}
     <table class="kv-table">
       {% for key, val in producto.ficha_tecnica.items() %}

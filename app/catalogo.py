@@ -1398,6 +1398,66 @@ def bulk_sync_oldest(db: Session, limit: int = 50) -> tuple[int, int, list[str]]
     return ok, len(skus), errors
 
 
+def update_ficha_tecnica(
+    db: Session,
+    sku: str,
+    nueva_ficha: dict,
+) -> tuple[bool, str, set[str]]:
+    """
+    Reemplaza completa la ficha_tecnica de un producto.
+    Devuelve (ok, mensaje, set_de_keys_que_cambiaron).
+
+    Las keys en `nueva_ficha` se asumen ya normalizadas (snake_case ascii).
+    El caller decide si pushear a ML los atributos que cambiaron y son
+    ML-linked (existen en ml_raw_attributes con un id ML).
+    """
+    prod = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return False, f"SKU '{sku}' no existe", set()
+
+    ficha_actual = dict(prod.ficha_tecnica or {})
+    nueva_ficha = {k: v for k, v in nueva_ficha.items() if k}  # filtrar keys vacías
+
+    # Detectar qué keys cambiaron (agregadas, modificadas o eliminadas)
+    keys_cambiadas: set[str] = set()
+    todas_keys = set(ficha_actual) | set(nueva_ficha)
+    for k in todas_keys:
+        if ficha_actual.get(k) != nueva_ficha.get(k):
+            keys_cambiadas.add(k)
+
+    if not keys_cambiadas:
+        return True, "Sin cambios en la ficha técnica", set()
+
+    # Asignación de dict nuevo (no mutación) para que SQLAlchemy detecte
+    # el cambio en el campo JSONB
+    prod.ficha_tecnica = nueva_ficha
+    db.commit()
+
+    return (
+        True,
+        f"✓ Ficha técnica actualizada · {len(keys_cambiadas)} cambio{'' if len(keys_cambiadas) == 1 else 's'}",
+        keys_cambiadas,
+    )
+
+
+def keys_linkeadas_a_ml(producto: Producto) -> set[str]:
+    """
+    Devuelve el set de keys de ficha_tecnica que mapean a un atributo ML.
+    Útil para saber qué keys se podrían pushear a ML al editar la ficha.
+    """
+    if not producto.ml_raw_attributes:
+        return set()
+    keys: set[str] = set()
+    for raw in producto.ml_raw_attributes:
+        attr_name = raw.get("name") or raw.get("id") or ""
+        key = _norm_attr_key(attr_name) or _norm_attr_key(raw.get("id") or "")
+        if key:
+            keys.add(key)
+    return keys
+
+
 def update_producto_basic(
     db: Session,
     sku: str,

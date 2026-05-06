@@ -42,7 +42,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.25.0"
+APP_VERSION = "0.26.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1105,6 +1105,139 @@ def catalogo_ml_push(
         "type": "success" if ok else "error",
         "msg": msg,
     }
+    return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+
+# ---------------------------------------------------------------
+# Editor de ficha técnica (CRUD completo sobre el JSONB)
+# ---------------------------------------------------------------
+
+@app.get("/catalogo/{sku}/ficha", response_class=HTMLResponse)
+def catalogo_ficha_form(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Form de edición de la ficha técnica (atributos JSONB del producto)."""
+    prod = db.execute(
+        select_(catalogo.Producto).where(catalogo.Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No se encontró el producto con SKU '{sku}'.",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    ml_keys = catalogo.keys_linkeadas_a_ml(prod)
+    ficha = prod.ficha_tecnica or {}
+    # Orden estable: primero las linkeadas a ML (que son las "importantes"),
+    # luego las locales, ambas alfabéticas dentro de cada grupo.
+    entries = [
+        {"key": k, "value": v if v is not None else "", "is_ml": k in ml_keys}
+        for k, v in sorted(ficha.items(), key=lambda kv: (kv[0] not in ml_keys, kv[0]))
+    ]
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "producto_ficha_editar.html",
+        {
+            "user": user,
+            "active": "catalogo",
+            "version": APP_VERSION,
+            "producto": {
+                "sku": prod.sku,
+                "titulo": prod.titulo,
+            },
+            "entries": entries,
+            "ml_write_enabled": ml_client.is_write_enabled(),
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/catalogo/{sku}/ficha")
+async def catalogo_ficha_save(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Guarda la ficha técnica completa. Parsea pares paralelos
+    `ficha_key[]` / `ficha_value[]`, normaliza las keys, descarta vacíos,
+    y persiste. Si hay write-sync ML activo y alguna key cambiada está
+    linkeada a un atributo ML, hace push de atributos.
+    """
+    form = await request.form()
+    keys = form.getlist("ficha_key")
+    values = form.getlist("ficha_value")
+
+    # Construir dict normalizado descartando vacíos
+    nueva_ficha: dict[str, str] = {}
+    for raw_k, raw_v in zip(keys, values):
+        norm = catalogo._norm_attr_key(raw_k or "")
+        val = (raw_v or "").strip()
+        if not norm or not val:
+            continue
+        # La última ocurrencia gana en caso de duplicado tras normalizar
+        nueva_ficha[norm] = val
+
+    # Necesitamos detectar las keys ML-linkeadas ANTES de guardar
+    prod = db.execute(
+        select_(catalogo.Producto).where(catalogo.Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No existe el SKU '{sku}'.",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+    ml_keys = catalogo.keys_linkeadas_a_ml(prod)
+
+    try:
+        ok, msg, cambios = catalogo.update_ficha_tecnica(db, sku, nueva_ficha)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse(f"/catalogo/{sku}/ficha", status_code=303)
+
+    if not ok:
+        request.session["flash"] = {"type": "error", "msg": msg}
+        return RedirectResponse(f"/catalogo/{sku}/ficha", status_code=303)
+
+    # Push a ML si hay atributos linkeados que cambiaron
+    push_attrs = bool(cambios & ml_keys)
+    if push_attrs and ml_client.is_write_enabled():
+        try:
+            push_ok, push_msg = catalogo.push_to_ml(
+                db, sku,
+                push_stock=False,
+                push_price=False,
+                push_description=False,
+                push_attributes=True,
+            )
+        except Exception as e:
+            push_ok = False
+            push_msg = f"ML push falló: {type(e).__name__}: {e}"
+        msg = f"{msg} · {push_msg}"
+        flash_type = "success" if push_ok else "warning"
+    elif push_attrs and not ml_client.is_write_enabled():
+        msg = f"{msg} · ⚠ Hay {len(cambios & ml_keys)} atributo(s) ML modificado(s) que no se pushearon (ML_WRITE_ENABLED=false)."
+        flash_type = "warning"
+    else:
+        flash_type = "success"
+
+    request.session["flash"] = {"type": flash_type, "msg": msg}
     return RedirectResponse(f"/catalogo/{sku}", status_code=303)
 
 
