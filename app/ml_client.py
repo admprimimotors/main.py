@@ -390,6 +390,14 @@ def update_item_attributes(db: Session, item_id: str, attributes: list) -> dict:
     return _put(db, f"/items/{item_id}", {"attributes": attributes})
 
 
+def update_item_status(db: Session, item_id: str, status: str) -> dict:
+    """
+    PUT /items/{id} con status nuevo.
+    ML acepta: 'active', 'paused', 'closed' (closed es irreversible vía API).
+    """
+    return _put(db, f"/items/{item_id}", {"status": status})
+
+
 # =============================================================
 # Compatibilidades (vehículos compatibles)
 # =============================================================

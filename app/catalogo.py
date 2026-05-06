@@ -1518,6 +1518,7 @@ def push_to_ml(
     push_price: bool = True,
     push_description: bool = False,
     push_attributes: bool = False,
+    auto_activate: bool = True,
 ) -> tuple[bool, str]:
     """
     Empuja stock / precio / descripción / atributos del DB local a la
@@ -1526,6 +1527,10 @@ def push_to_ml(
     Para `push_attributes`: solo se mandan atributos cuyo valor en
     `ficha_tecnica` difiere del value_name original que ML reportó.
     Atributos nuevos (sin ID de ML) no se pushean — los ignora.
+
+    Si `auto_activate=True` y el push de stock dejó al producto con
+    stock_actual > 0 mientras estaba en estado `paused` o `inactive` en ML,
+    también se pushea status=active para reactivar la publicación.
 
     Devuelve (ok, mensaje).
     """
@@ -1574,6 +1579,21 @@ def push_to_ml(
             ml_client.update_item_stock(db, prod.ml_item_id, prod.stock_actual)
             prod.ml_stock = prod.stock_actual
             msgs.append(f"stock={prod.stock_actual}")
+
+            # Auto-reactivar si la publicación estaba pausada/inactiva y ahora
+            # hay stock disponible. ML no reactiva sola por subir el stock —
+            # hace falta un PUT explícito de status.
+            if (
+                auto_activate
+                and prod.stock_actual > 0
+                and prod.ml_status in ("paused", "inactive")
+            ):
+                try:
+                    ml_client.update_item_status(db, prod.ml_item_id, "active")
+                    prod.ml_status = "active"
+                    msgs.append("reactivada (status=active)")
+                except ml_client.MLClientError as e:
+                    errors.append(f"activación falló: {e}")
         except ml_client.MLClientError as e:
             errors.append(f"stock falló: {e}")
 
