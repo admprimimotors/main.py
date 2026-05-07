@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.27.0"
+APP_VERSION = "0.27.1"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1245,6 +1245,80 @@ async def catalogo_ficha_save(
 # ===============================================================
 # Publicación de productos NUEVOS a Mercado Libre (POST /items)
 # ===============================================================
+
+@app.get("/api/ml/category-search")
+def api_ml_category_search(
+    q: str = "",
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Buscador de categorías ML para el form de publicar.
+    Estrategia:
+      1. domain_discovery (sugiere categorías exactas para "qué categoría es esto")
+      2. Si vacío: search de items + agrupar category_id por frecuencia
+      3. Para cada category_id resultante, traer name + path_from_root para
+         que el dropdown muestre "Accesorios › ... › Camisas de Motor".
+    """
+    query = (q or "").strip()
+    if len(query) < 2:
+        return JSONResponse({"results": []})
+
+    # Paso 1: domain_discovery
+    candidates = ml_client.domain_discovery_search(db, query, limit=8)
+    seen_cats: dict[str, dict] = {}
+    for c in candidates:
+        cat_id = c.get("category_id")
+        if not cat_id:
+            continue
+        if cat_id not in seen_cats:
+            seen_cats[cat_id] = {
+                "category_id": cat_id,
+                "category_name": c.get("category_name") or "",
+                "domain_name": c.get("domain_name") or "",
+                "votes": 0,
+                "source": "discovery",
+            }
+
+    # Paso 2: si discovery no trajo nada, fallback a search de items
+    if not seen_cats:
+        items = ml_client.search_items(db, query, limit=15)
+        for item in items:
+            cat_id = item.get("category_id")
+            if not cat_id:
+                continue
+            if cat_id not in seen_cats:
+                seen_cats[cat_id] = {
+                    "category_id": cat_id,
+                    "category_name": "",
+                    "domain_name": "",
+                    "votes": 0,
+                    "source": "search",
+                }
+            seen_cats[cat_id]["votes"] += 1
+
+    # Paso 3: enriquecer con name + path_from_root para cada categoría
+    enriched = []
+    for cat_id, info in seen_cats.items():
+        cat_full = ml_client.get_category(db, cat_id) or {}
+        name = info["category_name"] or cat_full.get("name") or cat_id
+        path = cat_full.get("path_from_root") or []
+        path_str = " › ".join(p.get("name", "") for p in path) if path else ""
+        enriched.append({
+            "category_id": cat_id,
+            "name": name,
+            "path": path_str,
+            "domain_name": info.get("domain_name", ""),
+            "votes": info["votes"],
+            "source": info["source"],
+        })
+
+    # Orden: votes desc (los más frecuentes en search arriba), luego nombre
+    enriched.sort(key=lambda x: (-x["votes"], x["name"]))
+
+    return JSONResponse({"results": enriched[:10]})
+
+
 
 @app.get("/catalogo/{sku}/publicar", response_class=HTMLResponse)
 def catalogo_publicar_form(

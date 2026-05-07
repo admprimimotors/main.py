@@ -48,6 +48,42 @@
   .candidato-radio input[type="radio"] { margin: 0; }
   .candidato-radio .prob { color: var(--muted); font-size: 11px; }
   .candidato-radio .path { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  .cat-search-wrap { position: relative; }
+  .cat-search-input {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; width: 100%; font-size: 14px; outline: none;
+    font-family: inherit;
+  }
+  .cat-search-input:focus { border-color: var(--brand); }
+  .cat-search-status { font-size: 11px; color: var(--muted); margin-top: 4px; min-height: 14px; }
+  .cat-search-results {
+    margin-top: 6px; max-height: 320px; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); display: none;
+  }
+  .cat-search-results.has-items { display: block; }
+  .cat-result-row {
+    padding: 10px 14px; border-bottom: 1px solid var(--border-soft);
+    cursor: pointer; transition: background .12s;
+  }
+  .cat-result-row:last-child { border-bottom: none; }
+  .cat-result-row:hover { background: var(--panel-2); }
+  .cat-result-name { font-weight: 600; color: var(--text); font-size: 13px; }
+  .cat-result-path { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .cat-result-meta { font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.4px; }
+
+  .cat-selected-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 8px;
+    background: rgba(34,197,94,.10); border: 1px solid rgba(34,197,94,.40);
+    color: #86efac; font-size: 13px;
+  }
+  .cat-clear-btn {
+    background: transparent; border: none; color: #fca5a5;
+    cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1;
+  }
+  .cat-clear-btn:hover { color: #f87171; }
 </style>
 
 {% if flash %}<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>{% endif %}
@@ -204,12 +240,46 @@
     </div>
     <input type="hidden" name="ml_category_id" value="{{ ml_category_id }}" />
   {% else %}
-    <div class="alert alert-error" style="margin: 0 0 12px;">
-      No pude predecir categoría ML del título. Revisá que el producto tenga
-      título descriptivo o cargá una categoría ML manualmente:
+    <div class="alert alert-warning" style="margin: 0 0 12px;">
+      ML no pudo predecir la categoría a partir del título. Buscala con palabras clave abajo:
     </div>
-    <input type="text" name="ml_category_id" placeholder="ej: MLA1234"
-           style="background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; width: 100%; font-size: 14px;" />
+
+    <!-- Buscador de categorías ML con autocomplete -->
+    <div class="cat-search-wrap">
+      <input
+        type="text"
+        id="cat-search-input"
+        placeholder="Tipeá 2+ palabras: ej. camisas motor, filtro aceite, junta..."
+        autocomplete="off"
+        class="cat-search-input"
+      />
+      <div id="cat-search-status" class="cat-search-status"></div>
+      <div id="cat-search-results" class="cat-search-results"></div>
+    </div>
+
+    <!-- Estado seleccionado (chip + hidden input que se manda al submit) -->
+    <div id="cat-selected-wrap" style="display: none; margin-top: 10px;">
+      <div class="cat-selected-chip">
+        <span style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px;">Categoría elegida:</span>
+        <strong id="cat-selected-name">—</strong>
+        <code id="cat-selected-id" style="background: var(--panel-2); padding: 2px 8px; border-radius: 4px; color: var(--brand-hover); font-size: 11px;"></code>
+        <button type="button" class="cat-clear-btn" onclick="clearCategory()">×</button>
+      </div>
+      <div id="cat-selected-path" style="font-size: 11px; color: var(--muted); margin-top: 4px;"></div>
+    </div>
+
+    <input type="hidden" id="ml_category_id" name="ml_category_id" value="" />
+
+    <details style="margin-top: 12px; font-size: 12px;">
+      <summary style="cursor: pointer; color: var(--muted);">¿Tenés el ID a mano? Pegalo manual</summary>
+      <input
+        type="text"
+        id="cat-manual-input"
+        placeholder="ej: MLA419747"
+        style="background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; width: 100%; font-size: 13px; margin-top: 6px;"
+        oninput="useManualId(this.value)"
+      />
+    </details>
   {% endif %}
 
   {% if producto.categoria and candidatos %}
@@ -265,10 +335,150 @@
 
   <div class="form-actions">
     <a href="/catalogo/{{ producto.sku|urlencode }}" class="btn btn-ghost">Cancelar</a>
-    <button type="submit" class="btn"
+    <button type="submit" class="btn" id="publish-btn"
             {% if not ready_to_publish or not ml_write_enabled %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}>
       ✚ Publicar en ML
     </button>
   </div>
 </form>
+
+<script>
+(function() {
+  const input = document.getElementById('cat-search-input');
+  const resultsEl = document.getElementById('cat-search-results');
+  const statusEl = document.getElementById('cat-search-status');
+  const hiddenInput = document.getElementById('ml_category_id');
+  const selectedWrap = document.getElementById('cat-selected-wrap');
+  const selectedName = document.getElementById('cat-selected-name');
+  const selectedId = document.getElementById('cat-selected-id');
+  const selectedPath = document.getElementById('cat-selected-path');
+  const manualInput = document.getElementById('cat-manual-input');
+
+  if (!input) return;  // Si vino con mapping ya guardado, no hay buscador
+
+  // Pre-cargar el query con un guess del título del producto
+  const tituloGuess = {{ (producto.titulo or "")|tojson }};
+  // Tomamos las primeras 3 palabras "limpias" como query inicial sugerida
+  const guessWords = tituloGuess
+    .toLowerCase()
+    .replace(/[^a-záéíóúñ0-9 ]/gi, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3)
+    .slice(0, 3);
+  if (guessWords.length) {
+    input.placeholder = "Tipeá 2+ palabras… ej: " + guessWords.join(' ');
+  }
+
+  let debounce = null;
+  let lastQuery = '';
+
+  function setStatus(msg) { statusEl.textContent = msg || ''; }
+
+  function renderResults(items) {
+    if (!items || items.length === 0) {
+      resultsEl.innerHTML = '';
+      resultsEl.classList.remove('has-items');
+      return;
+    }
+    resultsEl.innerHTML = items.map((r, idx) => `
+      <div class="cat-result-row" data-id="${escapeAttr(r.category_id)}"
+           data-name="${escapeAttr(r.name)}" data-path="${escapeAttr(r.path)}">
+        <div class="cat-result-name">${escapeHtml(r.name)}</div>
+        ${r.path ? `<div class="cat-result-path">${escapeHtml(r.path)}</div>` : ''}
+        <div class="cat-result-meta">
+          ${escapeHtml(r.category_id)}
+          ${r.source === 'discovery' ? ' · Sugerido por ML' : ''}
+          ${r.votes ? ` · ${r.votes} match${r.votes === 1 ? '' : 'es'}` : ''}
+        </div>
+      </div>
+    `).join('');
+    resultsEl.classList.add('has-items');
+
+    // Listeners para click
+    resultsEl.querySelectorAll('.cat-result-row').forEach(row => {
+      row.addEventListener('click', () => {
+        selectCategory({
+          id: row.dataset.id,
+          name: row.dataset.name,
+          path: row.dataset.path,
+        });
+      });
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  function selectCategory(cat) {
+    hiddenInput.value = cat.id;
+    selectedName.textContent = cat.name || cat.id;
+    selectedId.textContent = cat.id;
+    selectedPath.textContent = cat.path || '';
+    selectedWrap.style.display = 'block';
+    resultsEl.classList.remove('has-items');
+    resultsEl.innerHTML = '';
+    input.value = '';
+    setStatus('');
+  }
+
+  window.clearCategory = function() {
+    hiddenInput.value = '';
+    selectedWrap.style.display = 'none';
+    if (manualInput) manualInput.value = '';
+  };
+
+  window.useManualId = function(val) {
+    val = (val || '').trim().toUpperCase();
+    if (val.match(/^MLA\d+$/)) {
+      selectCategory({ id: val, name: 'Categoría ingresada manualmente', path: '' });
+    }
+  };
+
+  async function search(q) {
+    if (q.length < 2) {
+      resultsEl.classList.remove('has-items');
+      setStatus('');
+      return;
+    }
+    setStatus('Buscando…');
+    try {
+      const resp = await fetch('/api/ml/category-search?q=' + encodeURIComponent(q));
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      const items = data.results || [];
+      if (items.length === 0) {
+        setStatus('Sin resultados — probá con palabras más generales.');
+        resultsEl.classList.remove('has-items');
+      } else {
+        setStatus(items.length + ' categoría' + (items.length === 1 ? '' : 's') + ' encontrada' + (items.length === 1 ? '' : 's'));
+        renderResults(items);
+      }
+    } catch (e) {
+      setStatus('Error: ' + e.message);
+      resultsEl.classList.remove('has-items');
+    }
+  }
+
+  input.addEventListener('input', e => {
+    const q = e.target.value.trim();
+    if (q === lastQuery) return;
+    lastQuery = q;
+    clearTimeout(debounce);
+    debounce = setTimeout(() => search(q), 350);
+  });
+
+  // Si el usuario tipea ENTER, dispara la búsqueda inmediata
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      clearTimeout(debounce);
+      search(input.value.trim());
+    }
+  });
+})();
+</script>
 {% endblock %}

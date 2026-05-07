@@ -565,3 +565,79 @@ def create_item(db: Session, payload: dict) -> dict:
     con todos los campos requeridos.
     """
     return _post(db, "/items", payload)
+
+
+def domain_discovery_search(
+    db: Session,
+    query: str,
+    *,
+    site_id: str = "MLA",
+    limit: int = 8,
+) -> list[dict]:
+    """
+    Endpoint de "qué categoría es este producto" que ML usa internamente para
+    sugerir mientras tipeás el título de una publicación nueva.
+
+    GET /sites/{SITE}/domain_discovery/search?q=...&limit=N
+
+    Devuelve lista normalizada:
+      [{"category_id": "MLA1234", "category_name": "Camisas de Motor",
+        "domain_id": "MLA-CYLINDER_LINERS", "domain_name": "...",
+        "attributes": [...]}, ...]
+
+    Lista vacía si falla. Es un endpoint público autenticado — usa _get.
+    """
+    if not (query or "").strip():
+        return []
+    try:
+        resp = _get(
+            db,
+            f"/sites/{site_id}/domain_discovery/search",
+            params={"q": query.strip(), "limit": str(limit)},
+        )
+    except MLClientError:
+        return []
+    if not isinstance(resp, list):
+        return []
+    out = []
+    for r in resp:
+        if not isinstance(r, dict):
+            continue
+        out.append({
+            "category_id": r.get("category_id"),
+            "category_name": r.get("category_name") or "",
+            "domain_id": r.get("domain_id"),
+            "domain_name": r.get("domain_name") or "",
+        })
+    return out
+
+
+def search_items(
+    db: Session,
+    query: str,
+    *,
+    site_id: str = "MLA",
+    limit: int = 10,
+) -> list[dict]:
+    """
+    Búsqueda pública de items por keyword. La usamos como fallback al
+    domain_discovery: si éste no devuelve nada, sacamos los category_id
+    de los items que matchean la query y los aglomeramos por frecuencia.
+
+    GET /sites/{SITE}/search?q=...&limit=N — endpoint público autenticado.
+
+    Devuelve la lista raw de results (cada item con category_id, title, etc.).
+    """
+    if not (query or "").strip():
+        return []
+    try:
+        resp = _get(
+            db,
+            f"/sites/{site_id}/search",
+            params={"q": query.strip(), "limit": str(limit)},
+        )
+    except MLClientError:
+        return []
+    if isinstance(resp, dict):
+        return list(resp.get("results") or [])
+    return []
