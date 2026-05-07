@@ -474,6 +474,36 @@ class MLToken(Base):
     )
 
 
+class CategoriaMLMapping(Base):
+    """
+    Cache nuestra-categoría → ML category_id.
+
+    Cuando publicamos por primera vez un producto de "filtros_aceite", el
+    predictor de ML sugiere una categoría (ej MLA1234). El usuario confirma y
+    queda guardado acá. La próxima vez que publiquemos un producto con
+    `categoria='filtros_aceite'`, vamos directo a esa MLA1234 sin volver a
+    pedir confirmación.
+
+    El usuario puede sobrescribir el mapeo en cualquier momento desde la UI.
+    """
+    __tablename__ = "categoria_ml_mapping"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    nuestra_categoria: Mapped[str] = mapped_column(
+        String(120), unique=True, nullable=False, index=True
+    )
+    ml_category_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ml_category_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Si el mapeo lo confirmó manualmente el usuario (vs ser solo el último predicho).
+    confirmado: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class ProductoCompatibilidad(Base):
     __tablename__ = "producto_compatibilidades"
 

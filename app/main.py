@@ -33,6 +33,7 @@ from . import (
     clientes,
     database,
     ml_client,
+    ml_publisher,
     notas_credito,
     precios,
     remitos,
@@ -42,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.26.0"
+APP_VERSION = "0.27.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1239,6 +1240,267 @@ async def catalogo_ficha_save(
 
     request.session["flash"] = {"type": flash_type, "msg": msg}
     return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+
+# ===============================================================
+# Publicación de productos NUEVOS a Mercado Libre (POST /items)
+# ===============================================================
+
+@app.get("/catalogo/{sku}/publicar", response_class=HTMLResponse)
+def catalogo_publicar_form(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Preflight de publicación: muestra categoría predicha + alternativas,
+    estado de readiness (qué falta), atributos requeridos por la categoría.
+    """
+    prod = db.execute(
+        select_(catalogo.Producto).where(catalogo.Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"No se encontró el producto con SKU '{sku}'.",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    if prod.ml_item_id:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": (
+                f"Este producto ya está publicado en ML como {prod.ml_item_id}. "
+                "Para actualizarlo usá Push a ML."
+            ),
+        }
+        return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+    # Resolver categoría: mapping guardado, o predicción del título
+    ml_cat_id, ml_cat_name, candidatos = ml_publisher.get_or_predict_ml_category(
+        db,
+        nuestra_categoria=prod.categoria,
+        titulo=prod.titulo or "",
+    )
+
+    cat_attrs = ml_client.get_category_attributes(db, ml_cat_id) if ml_cat_id else []
+    req_attrs = ml_publisher.required_attributes(cat_attrs)
+    problems = ml_publisher.validate_ready(
+        prod, ml_category_id=ml_cat_id, required_attrs=req_attrs
+    )
+
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "producto_publicar.html",
+        {
+            "user": user,
+            "active": "catalogo",
+            "version": APP_VERSION,
+            "producto": prod,
+            "ml_category_id": ml_cat_id,
+            "ml_category_name": ml_cat_name,
+            "candidatos": candidatos,
+            "required_attrs": req_attrs,
+            "problems": problems,
+            "ready_to_publish": len(problems) == 0,
+            "ml_write_enabled": ml_client.is_write_enabled(),
+            "default_listing_type": ml_publisher.DEFAULT_LISTING_TYPE,
+            "default_initial_status": ml_publisher.DEFAULT_INITIAL_STATUS,
+            "free_shipping_min": ml_publisher.FREE_SHIPPING_MIN,
+            "flex_enabled": ml_publisher.FLEX_ENABLED,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/catalogo/{sku}/publicar")
+def catalogo_publicar_save(
+    request: Request,
+    sku: str,
+    ml_category_id: str = Form(default=""),
+    confirmar_categoria: str = Form(default=""),
+    listing_type_id: str = Form(default=""),
+    initial_status: str = Form(default=""),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Crea la publicación. Si el usuario eligió/confirmó una categoría distinta a
+    la predicha, la guardamos en `categoria_ml_mapping` para futuros productos
+    de la misma categoría interna.
+    """
+    cat_id = (ml_category_id or "").strip() or None
+    listing = (listing_type_id or "").strip() or None
+    status = (initial_status or "").strip() or None
+
+    # Si pidieron confirmar el mapping, lo grabamos antes de publicar
+    if cat_id and confirmar_categoria.lower() in ("on", "true", "1", "yes"):
+        prod = db.execute(
+            select_(catalogo.Producto).where(catalogo.Producto.sku == sku)
+        ).scalar_one_or_none()
+        if prod and prod.categoria:
+            try:
+                # Buscamos el nombre de categoría para guardar legible
+                cat_info = ml_client.get_category(db, cat_id)
+                ml_publisher.confirm_categoria_mapping(
+                    db,
+                    nuestra_categoria=prod.categoria,
+                    ml_category_id=cat_id,
+                    ml_category_name=(cat_info or {}).get("name"),
+                    confirmado=True,
+                )
+            except Exception:
+                pass  # No bloqueamos la publicación si el cache falla
+
+    try:
+        ok, msg, item_id = ml_publisher.create_publication(
+            db, sku,
+            ml_category_id_override=cat_id,
+            listing_type_id=listing,
+            initial_status=status,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse(f"/catalogo/{sku}/publicar", status_code=303)
+
+    request.session["flash"] = {
+        "type": "success" if ok else "error",
+        "msg": msg,
+    }
+    if ok:
+        return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+    return RedirectResponse(f"/catalogo/{sku}/publicar", status_code=303)
+
+
+# --- Vista masiva (top-level path para no chocar con /catalogo/{sku}) ---
+
+@app.get("/publicar", response_class=HTMLResponse)
+def publicar_masivo_form(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Lista de productos sin publicar en ML, con preflight de readiness para
+    cada uno. Permite publicar individualmente o masivo.
+    """
+    productos = ml_publisher.get_publishable_products(db, limit=500)
+
+    # Para el listado masivo solo chequeamos lo barato (campos básicos + foto).
+    # El check de categoría/atributos requeridos se hace en el preflight individual
+    # — sería costoso pegarle a ML por cada producto acá.
+    rows = []
+    for prod in productos:
+        problems = []
+        if not (prod.titulo or "").strip():
+            problems.append("título")
+        if prod.precio_final is None or prod.precio_final <= 0:
+            problems.append("precio")
+        if (prod.stock_actual or 0) <= 0:
+            problems.append("stock")
+        if not prod.fotos:
+            problems.append("fotos")
+        rows.append({
+            "sku": prod.sku,
+            "titulo": prod.titulo,
+            "categoria": prod.categoria,
+            "marca": prod.marca,
+            "precio": prod.precio_final,
+            "stock": prod.stock_actual,
+            "foto_url": prod.fotos[0].url if prod.fotos else None,
+            "problems_quick": problems,
+            "ready_quick": len(problems) == 0,
+        })
+
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "publicar_masivo.html",
+        {
+            "user": user,
+            "active": "publicar",
+            "version": APP_VERSION,
+            "rows": rows,
+            "total": len(rows),
+            "ml_write_enabled": ml_client.is_write_enabled(),
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/publicar")
+async def publicar_masivo_run(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Ejecuta la publicación masiva sobre los SKUs marcados con checkbox.
+    Body: ficha_sku[]=...
+    """
+    form = await request.form()
+    skus = [s.strip() for s in form.getlist("sku") if (s or "").strip()]
+    if not skus:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": "No seleccionaste ningún producto.",
+        }
+        return RedirectResponse("/publicar", status_code=303)
+
+    try:
+        summary = ml_publisher.bulk_create(db, skus, dry_run=False)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado en publicación masiva: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/publicar", status_code=303)
+
+    n_ok = len(summary["ok"])
+    n_fail = len(summary["fail"])
+    n_skip = len(summary["skipped"])
+    if n_ok and not n_fail:
+        flash_type = "success"
+    elif n_ok:
+        flash_type = "warning"
+    else:
+        flash_type = "error"
+
+    parts = [f"{n_ok} publicado{'s' if n_ok != 1 else ''}"]
+    if n_fail:
+        parts.append(f"{n_fail} con error")
+    if n_skip:
+        parts.append(f"{n_skip} salteado{'s' if n_skip != 1 else ''}")
+
+    msg = "Publicación masiva: " + " · ".join(parts) + "."
+    if n_fail:
+        # Mostramos los primeros 3 errores para no inundar el flash
+        errores_breve = "; ".join(
+            f"{f['sku']}: {f['msg'][:80]}" for f in summary["fail"][:3]
+        )
+        msg += f" Errores: {errores_breve}"
+        if n_fail > 3:
+            msg += f" (+ {n_fail - 3} más)"
+
+    request.session["flash"] = {"type": flash_type, "msg": msg}
+    return RedirectResponse("/publicar", status_code=303)
 
 
 # ===============================================================

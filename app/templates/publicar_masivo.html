@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Publicaciones nuevas · Primi Motors{% endblock %}
+{% block page_title %}Publicaciones nuevas en ML{% endblock %}
+
+{% block content %}
+<style>
+  .alert { padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 18px; border: 1px solid; line-height: 1.5; }
+  .alert-success { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.40); color: #86efac; }
+  .alert-warning { background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.40); color: #fcd34d; }
+  .alert-error   { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+  .alert code { background: rgba(0,0,0,.25); padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+
+  .filter-form { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; align-items: center; }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table thead th {
+    text-align: left; padding: 10px; color: var(--muted); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.4px; font-size: 11px;
+    border-bottom: 1px solid var(--border-soft); background: var(--panel-2);
+  }
+  .data-table tbody td { padding: 10px; border-bottom: 1px solid var(--border-soft); color: var(--muted-strong); }
+  .data-table tbody tr:last-child td { border-bottom: none; }
+  .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .thumb { width: 42px; height: 42px; object-fit: cover; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--border-soft); }
+  .thumb-empty { width: 42px; height: 42px; border-radius: 4px; background: var(--panel-2); border: 1px dashed var(--border); display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 18px; }
+
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .pill-ok   { background: rgba(34,197,94,.12); color: #86efac; border: 1px solid rgba(34,197,94,.30); }
+  .pill-miss { background: rgba(239,68,68,.10); color: #fca5a5; border: 1px solid rgba(239,68,68,.30); }
+
+  .missing-tag {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    background: rgba(239,68,68,.08); color: #fca5a5; font-size: 10px;
+    margin-right: 4px; border: 1px solid rgba(239,68,68,.20);
+  }
+
+  .toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 12px; padding: 12px 16px;
+    border-top: 1px solid var(--border-soft); background: var(--panel-2);
+  }
+
+  .totals-info { font-size: 12px; color: var(--muted); }
+</style>
+
+{% if flash %}<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>{% endif %}
+
+<div class="page-intro">
+  <h2>Publicaciones nuevas en ML</h2>
+  <p>{{ total }} producto{{ '' if total == 1 else 's' }} sin publicar en Mercado Libre.</p>
+</div>
+
+{% if not ml_write_enabled %}
+<div class="alert alert-warning">
+  <strong>Modo lectura ML:</strong> el write sync está desactivado, así que el botón
+  "Publicar seleccionados" va a fallar. Para activarlo, seteá
+  <code>ML_SYNC_WRITE_ENABLED=true</code> en Render.
+</div>
+{% endif %}
+
+<div class="alert alert-warning">
+  <strong>El check rápido de esta tabla solo valida lo barato</strong>
+  (título, precio, stock, fotos). Los atributos obligatorios de cada categoría ML
+  se verifican al publicar. Si fallan en el bulk, podés ir uno por uno con el
+  botón <strong>Preflight</strong> de cada fila.
+</div>
+
+{% if rows %}
+<form method="post" action="/publicar">
+<div class="card" style="padding: 0; overflow-x: auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width: 36px;"><input type="checkbox" id="check-all" onclick="toggleAll(this)" /></th>
+        <th style="width: 56px;"></th>
+        <th>SKU / Título</th>
+        <th>Categoría</th>
+        <th class="num">Precio</th>
+        <th class="num">Stock</th>
+        <th>Estado pre-flight</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>
+          <input type="checkbox" name="sku" value="{{ r.sku }}" class="row-check"
+                 {% if not r.ready_quick %}disabled title="Faltan datos básicos"{% endif %} />
+        </td>
+        <td>
+          {% if r.foto_url %}
+            <img src="{{ r.foto_url }}" alt="" class="thumb" />
+          {% else %}
+            <div class="thumb-empty">📷</div>
+          {% endif %}
+        </td>
+        <td>
+          <div style="font-family: ui-monospace, monospace; color: var(--brand-hover); font-weight: 600; font-size: 12px;">{{ r.sku }}</div>
+          <div style="color: var(--text); margin-top: 2px;">{{ r.titulo|truncate(70) }}</div>
+        </td>
+        <td>
+          {% if r.categoria %}
+            <span style="font-size: 11px; color: var(--muted-strong);">{{ r.categoria }}</span>
+          {% else %}
+            <span style="font-size: 11px; color: var(--muted);">—</span>
+          {% endif %}
+          {% if r.marca %}
+          <div style="font-size: 10px; color: var(--muted); margin-top: 2px;">{{ r.marca }}</div>
+          {% endif %}
+        </td>
+        <td class="num">
+          {% if r.precio %}<strong>${{ "{:,.0f}".format(r.precio|float) }}</strong>{% else %}<span style="color: var(--muted);">—</span>{% endif %}
+        </td>
+        <td class="num">{{ r.stock }}</td>
+        <td>
+          {% if r.ready_quick %}
+            <span class="pill pill-ok">Datos OK</span>
+          {% else %}
+            <span class="pill pill-miss">Falta:</span>
+            {% for p in r.problems_quick %}
+              <span class="missing-tag">{{ p }}</span>
+            {% endfor %}
+          {% endif %}
+        </td>
+        <td>
+          <a href="/catalogo/{{ r.sku|urlencode }}/publicar" class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px;" title="Pre-flight individual y publicación">
+            Pre-flight →
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="toolbar">
+    <span class="totals-info">
+      <span id="sel-count">0</span> seleccionado(s)
+    </span>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <button type="submit" class="btn"
+              onclick="return confirm('¿Publicar los productos seleccionados en ML?\n\nSe crearán como borradores (estado pausado).')"
+              {% if not ml_write_enabled %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}>
+        ✚ Publicar seleccionados
+      </button>
+    </div>
+  </div>
+</div>
+</form>
+
+{% else %}
+<div class="card stub">
+  <div class="stub-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+      <polyline points="22 4 12 14.01 9 11.01"/>
+    </svg>
+  </div>
+  <h2>Todo publicado</h2>
+  <p>No hay productos activos sin publicar en ML.</p>
+</div>
+{% endif %}
+
+<script>
+function toggleAll(master) {
+  const checks = document.querySelectorAll('.row-check:not([disabled])');
+  checks.forEach(c => { c.checked = master.checked; });
+  updateCount();
+}
+function updateCount() {
+  const n = document.querySelectorAll('.row-check:checked').length;
+  const el = document.getElementById('sel-count');
+  if (el) el.textContent = n;
+}
+document.addEventListener('change', e => {
+  if (e.target && e.target.classList && e.target.classList.contains('row-check')) {
+    updateCount();
+  }
+});
+</script>
+{% endblock %}

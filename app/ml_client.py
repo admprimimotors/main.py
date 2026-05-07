@@ -421,3 +421,147 @@ def get_item_compatibilities(db: Session, item_id: str) -> list:
     if isinstance(resp, list):
         return resp
     return []
+
+
+# =============================================================
+# Creación de items (POST) — para publicar productos nuevos
+# =============================================================
+
+def _post(db: Session, path: str, payload: dict) -> dict:
+    """
+    POST autenticado a la API de ML. Mismo patrón de retry-on-401 que _put.
+    NO chequea is_write_enabled aquí — es responsabilidad del caller.
+    """
+    token = get_access_token(db)
+    url = f"{ML_API_BASE}{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+    except requests.RequestException as e:
+        raise MLClientError(f"Error de red en POST {path}: {e}") from e
+
+    if response.status_code == 401:
+        _access_token_cache["expires_at"] = 0
+        token = get_access_token(db)
+        try:
+            response = requests.post(
+                url,
+                headers={**headers, "Authorization": f"Bearer {token}"},
+                json=payload,
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            raise MLClientError(f"Error de red en POST {path} (retry): {e}") from e
+
+    if not response.ok:
+        # ML devuelve detalles útiles en el body — los mostramos en el error
+        # para que el caller pueda surface qué falta (atributo X requerido, etc.).
+        raise MLClientError(
+            f"ML POST {path} → {response.status_code}: {response.text[:500]}"
+        )
+
+    return response.json()
+
+
+def predict_category(
+    db: Session,
+    title: str,
+    *,
+    site_id: str = "MLA",
+    limit: int = 5,
+) -> list[dict]:
+    """
+    Pregunta a ML qué categoría usar a partir del título del producto.
+    Endpoint público: /sites/{SITE}/category_predictor/predict?title=...
+
+    Devuelve lista de candidatos ordenados por probabilidad descendente:
+      [{"category_id": "MLA1234", "category_name": "...",
+        "prediction_probability": 0.95, "path_from_root": [...]}, ...]
+
+    Lista vacía si falla — el caller decide cómo manejarlo.
+    """
+    if not (title or "").strip():
+        return []
+    try:
+        resp = _get(
+            db,
+            f"/sites/{site_id}/category_predictor/predict",
+            params={"title": title.strip(), "limit": str(limit)},
+        )
+    except MLClientError:
+        return []
+    # ML devuelve un dict con la categoría top y a veces incluye `alternatives`.
+    # Normalizamos a lista de candidatos.
+    if isinstance(resp, dict):
+        candidates: list[dict] = []
+        if resp.get("id"):
+            candidates.append({
+                "category_id": resp.get("id"),
+                "category_name": resp.get("name", ""),
+                "prediction_probability": resp.get("prediction_probability"),
+                "path_from_root": resp.get("path_from_root", []),
+            })
+        for alt in resp.get("alternatives") or []:
+            candidates.append({
+                "category_id": alt.get("id"),
+                "category_name": alt.get("name", ""),
+                "prediction_probability": alt.get("prediction_probability"),
+                "path_from_root": alt.get("path_from_root", []),
+            })
+        return candidates[:limit]
+    if isinstance(resp, list):
+        return [
+            {
+                "category_id": c.get("id"),
+                "category_name": c.get("name", ""),
+                "prediction_probability": c.get("prediction_probability"),
+                "path_from_root": c.get("path_from_root", []),
+            }
+            for c in resp[:limit]
+        ]
+    return []
+
+
+# Cache de atributos por categoría (clave = category_id, valor = lista de attrs).
+# Las definiciones de categoría no cambian seguido — vacía en cada redeploy.
+_category_attrs_cache: dict = {}
+
+
+def get_category_attributes(db: Session, category_id: str) -> list[dict]:
+    """
+    GET /categories/{id}/attributes — devuelve la lista completa de atributos
+    de la categoría, incluyendo cuáles son required (`tags.required` o
+    `attribute_group_id == "OTHERS"` con tags).
+
+    Cada attr tiene: id, name, value_type, tags{required, allow_variations,...},
+    values (lista cerrada si aplica), allowed_units, etc.
+
+    Lista vacía si falla.
+    """
+    if not category_id:
+        return []
+    if category_id in _category_attrs_cache:
+        return _category_attrs_cache[category_id]
+    try:
+        resp = _get(db, f"/categories/{category_id}/attributes")
+    except MLClientError:
+        resp = []
+    attrs = resp if isinstance(resp, list) else []
+    _category_attrs_cache[category_id] = attrs
+    return attrs
+
+
+def create_item(db: Session, payload: dict) -> dict:
+    """
+    POST /items con el payload completo. Crea una publicación nueva en ML.
+    Devuelve el dict del item recién creado (incluye `id` ML, `permalink`,
+    `status`, etc.).
+
+    El caller debe haber chequeado is_write_enabled() y armado el payload
+    con todos los campos requeridos.
+    """
+    return _post(db, "/items", payload)
