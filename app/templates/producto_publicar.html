@@ -107,6 +107,72 @@
 </div>
 {% endif %}
 
+{% if es_matriz %}
+<div class="alert" style="background: rgba(59,130,246,.10); border-color: rgba(59,130,246,.40); color: #93c5fd;">
+  <strong>Publicación con variantes detectada:</strong> hay
+  <strong>{{ variantes|length }} productos</strong> con el mismo título — se van a
+  publicar como UNA sola publicación matriz en ML, donde el comprador elige
+  la medida en un dropdown.
+</div>
+
+<div class="card" style="margin-bottom: 18px;">
+  <div class="card-title">Variantes a publicar como matriz ({{ variantes|length }})</div>
+  <table class="attr-table">
+    <thead>
+      <tr>
+        <th>SKU</th>
+        <th>Medida</th>
+        <th class="num">Precio</th>
+        <th class="num">Stock</th>
+        <th>Fotos</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for v in variantes %}
+      {% set medida = (v.ficha_tecnica or {}).get('medida') or (v.ficha_tecnica or {}).get('medidas') or (v.ficha_tecnica or {}).get('size') or '' %}
+      <tr>
+        <td><code style="color: var(--brand-hover); font-size: 11px;">{{ v.sku }}</code>
+          {% if v.sku == producto.sku %}<span style="font-size: 9px; color: var(--muted); text-transform: uppercase; margin-left: 4px;">actual</span>{% endif %}
+        </td>
+        <td>
+          {% if medida %}
+            <strong>{{ medida }}</strong>
+          {% else %}
+            <span class="pill pill-miss">✗ Sin medida</span>
+          {% endif %}
+        </td>
+        <td class="num">{% if v.precio_final %}${{ "{:,.0f}".format(v.precio_final|float) }}{% else %}<span style="color: var(--muted);">—</span>{% endif %}</td>
+        <td class="num">{{ v.stock_actual or 0 }}</td>
+        <td>{{ v.fotos|length }}</td>
+        <td>
+          {% if v.ml_item_id %}
+            <span class="pill pill-miss">Ya publicado</span>
+          {% elif not medida %}
+            <span class="pill pill-miss">Falta medida</span>
+          {% elif not v.precio_final or v.precio_final <= 0 %}
+            <span class="pill pill-miss">Falta precio</span>
+          {% elif (v.stock_actual or 0) <= 0 %}
+            <span class="pill pill-miss">Sin stock</span>
+          {% elif not v.fotos %}
+            <span class="pill pill-miss">Sin fotos</span>
+          {% else %}
+            <span class="pill pill-ok">OK</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p style="font-size: 12px; color: var(--muted); margin-top: 10px; margin-bottom: 0;">
+    Cada variante necesita tener cargada la <code>medida</code> en su ficha técnica
+    (ej: <code>STD</code>, <code>+0.30</code>, <code>+0.60</code>). El precio, stock y
+    fotos se mandan individualmente por variante. La descripción y atributos generales
+    se toman del primer producto del grupo.
+  </p>
+</div>
+{% endif %}
+
 <div class="preflight-grid">
   <!-- Lado izquierdo: checklist de readiness -->
   <div class="card">

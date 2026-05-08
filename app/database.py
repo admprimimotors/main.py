@@ -150,6 +150,15 @@ def _apply_migrations() -> None:
         ADD COLUMN IF NOT EXISTS ml_compat_id VARCHAR(64)
         """,
         "CREATE INDEX IF NOT EXISTS ix_proco_ml_compat_id ON producto_compatibilidades(ml_compat_id)",
+        # v12 (2026-05-08): variation_id de ML para publicaciones con variantes.
+        # Cuando publicamos un grupo de productos con mismo título como una sola
+        # publicación matriz, ML asigna un variation_id distinto a cada variante.
+        # Lo guardamos para poder pushear stock/precio individualmente después.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS ml_variation_id VARCHAR(64)
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_productos_ml_variation_id ON productos(ml_variation_id)",
     ]
     try:
         with engine.begin() as conn:

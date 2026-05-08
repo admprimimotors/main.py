@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.28.1"
+APP_VERSION = "0.29.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1485,6 +1485,10 @@ def catalogo_publicar_form(
     )
     other_checks_pass = len(problems_basic) == 0
 
+    # Detectar variantes (productos activos con mismo título)
+    variantes = ml_publisher.find_variants(db, prod.titulo or "")
+    es_matriz = len(variantes) >= 2
+
     flash = request.session.pop("flash", None)
     return templates.TemplateResponse(
         request,
@@ -1501,6 +1505,8 @@ def catalogo_publicar_form(
             "problems": problems,
             "ready_to_publish": len(problems) == 0,
             "other_checks_pass": other_checks_pass,
+            "variantes": variantes,
+            "es_matriz": es_matriz,
             "ml_write_enabled": ml_client.is_write_enabled(),
             "default_listing_type": ml_publisher.DEFAULT_LISTING_TYPE,
             "default_initial_status": ml_publisher.DEFAULT_INITIAL_STATUS,
@@ -1550,13 +1556,31 @@ def catalogo_publicar_save(
             except Exception:
                 pass  # No bloqueamos la publicación si el cache falla
 
+    # ¿Tiene variantes (productos con mismo título)? Si sí, publicación matriz.
+    prod_for_check = db.execute(
+        select_(catalogo.Producto).where(catalogo.Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod_for_check and prod_for_check.titulo:
+        variantes = ml_publisher.find_variants(db, prod_for_check.titulo)
+    else:
+        variantes = []
+    use_matrix = len(variantes) >= 2
+
     try:
-        ok, msg, item_id = ml_publisher.create_publication(
-            db, sku,
-            ml_category_id_override=cat_id,
-            listing_type_id=listing,
-            initial_status=status,
-        )
+        if use_matrix:
+            ok, msg, item_id, n_var = ml_publisher.create_matrix_publication(
+                db, sku,
+                ml_category_id_override=cat_id,
+                listing_type_id=listing,
+                initial_status=status,
+            )
+        else:
+            ok, msg, item_id = ml_publisher.create_publication(
+                db, sku,
+                ml_category_id_override=cat_id,
+                listing_type_id=listing,
+                initial_status=status,
+            )
     except Exception as e:
         import traceback
         traceback.print_exc()

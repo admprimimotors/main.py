@@ -661,6 +661,283 @@ def create_publication(
 
 
 # =============================================================
+# Publicación matriz (con variantes)
+# =============================================================
+
+def build_matrix_payload(
+    variants: list[Producto],
+    *,
+    ml_category_id: str,
+    category_attrs: list[dict],
+    variation_attr: dict,
+    listing_type_id: Optional[str] = None,
+    initial_status: Optional[str] = None,
+    is_catalog: bool = False,
+) -> dict:
+    """
+    Arma el payload para POST /items con `variations[]`.
+
+    Cada variante:
+      - attribute_combinations: [{id: <variation_attr_id>, value_name: ...}]
+      - price, available_quantity propios
+      - seller_custom_field: el SKU local
+      - picture_ids: las URLs de las fotos del producto-variante (en POST
+        van como picture_ids, pero ML acepta `pictures: [{source: url}]`
+        para variations también — usamos ese formato)
+    """
+    listing_type_id = listing_type_id or DEFAULT_LISTING_TYPE
+    initial_status = initial_status or DEFAULT_INITIAL_STATUS
+
+    # Tomamos al primero como "matriz" (su info se hereda — título, fotos
+    # nivel item si las usamos, etc.).
+    master = variants[0]
+
+    var_attr_id = variation_attr.get("id")
+    allowed_values = variation_attr.get("values") or []
+
+    # Atributos compartidos (a nivel item) — sacamos del primero. No mandamos
+    # acá el atributo que varía (ese va a attribute_combinations).
+    item_attrs = [
+        a for a in _ficha_to_ml_attributes(master.ficha_tecnica or {}, category_attrs)
+        if a.get("id") != var_attr_id
+    ]
+
+    # Acumulamos todas las fotos de TODAS las variantes a nivel item, para
+    # que ML las tenga disponibles para asociar a cada variation.
+    seen_urls = set()
+    item_pictures: list[dict] = []
+    for v in variants:
+        for f in (v.fotos or []):
+            if f.url and f.url not in seen_urls:
+                seen_urls.add(f.url)
+                item_pictures.append({"source": f.url})
+
+    variations_block: list[dict] = []
+    for v in variants:
+        medida_raw = _get_medida_from_ficha(v)
+        value_id, value_name = match_variation_value(medida_raw, allowed_values)
+
+        combo: dict = {"id": var_attr_id}
+        if value_id:
+            combo["value_id"] = value_id
+        if value_name:
+            combo["value_name"] = value_name
+
+        var_pictures = [{"source": f.url} for f in (v.fotos or []) if f.url]
+
+        variations_block.append({
+            "attribute_combinations": [combo],
+            "price": float(v.precio_final or 0),
+            "available_quantity": int(v.stock_actual or 0),
+            "seller_custom_field": v.sku,
+            # ML acepta `pictures` o `picture_ids`. Con `pictures` nos podemos
+            # ahorrar un upload previo (ML toma las URLs y las descarga).
+            "pictures": var_pictures,
+        })
+
+    payload: dict = {
+        "category_id": ml_category_id,
+        "currency_id": DEFAULT_CURRENCY,
+        "buying_mode": DEFAULT_BUYING_MODE,
+        "listing_type_id": listing_type_id,
+        "condition": DEFAULT_CONDITION,
+        # Las fotos a nivel item son la unión de todas las variantes
+        "pictures": item_pictures,
+        "shipping": _shipping_block(master.precio_final or Decimal("0")),
+        "sale_terms": _sale_terms_block(),
+        "attributes": item_attrs,
+        "status": initial_status,
+        "family_name": _derive_family_name(master),
+        "variations": variations_block,
+    }
+
+    if not is_catalog:
+        payload["title"] = (master.titulo or "").strip()[:60]
+
+    return payload
+
+
+def create_matrix_publication(
+    db: Session,
+    sku: str,
+    *,
+    ml_category_id_override: Optional[str] = None,
+    listing_type_id: Optional[str] = None,
+    initial_status: Optional[str] = None,
+) -> tuple[bool, str, Optional[str], int]:
+    """
+    Publica un grupo de productos con mismo título como UNA publicación
+    matriz con variations[]. Devuelve (ok, msg, ml_item_id, n_variantes).
+
+    Detecta variantes por título idéntico al producto identificado por `sku`.
+    Si solo hay 1 producto con ese título, error — el caller debería usar
+    create_publication() simple.
+    """
+    if not ml_client.is_write_enabled():
+        return False, (
+            "Write sync ML deshabilitado. "
+            "Para activar, seteá ML_SYNC_WRITE_ENABLED=true en Render."
+        ), None, 0
+
+    master = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if master is None:
+        return False, f"SKU '{sku}' no existe", None, 0
+
+    variants = find_variants(db, master.titulo or "", exclude_published=False)
+    if not variants:
+        return False, "No se encontraron variantes (raro — al menos el master debería matchear).", None, 0
+    if len(variants) < 2:
+        return False, (
+            f"Solo se encontró 1 producto con título '{master.titulo}'. "
+            "Para publicar como matriz necesito al menos 2 variantes con mismo título."
+        ), None, 0
+
+    # Validar que ninguna esté ya publicada (no podemos crear matriz si una
+    # variante ya tiene su propio ml_item_id).
+    ya_publicadas = [v for v in variants if v.ml_item_id]
+    if ya_publicadas:
+        skus_pub = ", ".join(v.sku for v in ya_publicadas)
+        return False, (
+            f"Estas variantes ya están publicadas individualmente y deben "
+            f"despublicarse antes: {skus_pub}"
+        ), None, 0
+
+    # Resolver categoría desde el master
+    if ml_category_id_override:
+        ml_cat_id = ml_category_id_override
+    else:
+        ml_cat_id, _name, _ = get_or_predict_ml_category(
+            db, nuestra_categoria=master.categoria, titulo=master.titulo or "",
+        )
+    if not ml_cat_id:
+        return False, "No se pudo resolver la categoría ML.", None, 0
+
+    # Atributos de la categoría
+    category_attrs = ml_client.get_category_attributes(db, ml_cat_id)
+    req_attrs = required_attributes(category_attrs)
+    is_cat = is_catalog_category(db, ml_cat_id)
+
+    # Encontrar el atributo ML que admite variations
+    var_attr = find_variation_attribute(category_attrs)
+    if not var_attr:
+        return False, (
+            "Esta categoría ML no admite variantes según su definición. "
+            "Hay que publicar cada producto por separado."
+        ), None, 0
+
+    # Pre-flight para cada variante: chequeos básicos + atributos requeridos
+    # (ojo: el atributo de variación NO tiene que estar en cada ficha entera,
+    # solo el VALOR de medida)
+    for v in variants:
+        # Chequeos básicos sin categoría
+        problems_basic = validate_ready(v, ml_category_id="__DUMMY__", required_attrs=[])
+        if problems_basic:
+            return False, (
+                f"Variante {v.sku}: " + " · ".join(problems_basic)
+            ), None, 0
+        if not _get_medida_from_ficha(v):
+            return False, (
+                f"Variante {v.sku}: no tiene 'medida' cargada en ficha técnica "
+                "(es lo que diferencia las variantes)."
+            ), None, 0
+
+    # Atributos shared a nivel item: chequeamos contra el master
+    if req_attrs:
+        # El atributo de variación no es obligatorio a nivel item (va en cada variation)
+        req_item_attrs = [a for a in req_attrs if a.get("id") != var_attr.get("id")]
+        problems_attrs = validate_ready(
+            master, ml_category_id=ml_cat_id, required_attrs=req_item_attrs
+        )
+        if problems_attrs:
+            return False, (
+                "Faltan atributos obligatorios a nivel matriz: "
+                + " · ".join(problems_attrs)
+            ), None, 0
+
+    # Armar payload y publicar
+    payload = build_matrix_payload(
+        variants,
+        ml_category_id=ml_cat_id,
+        category_attrs=category_attrs,
+        variation_attr=var_attr,
+        listing_type_id=listing_type_id,
+        initial_status=initial_status,
+        is_catalog=is_cat,
+    )
+
+    try:
+        resp = ml_client.create_item(db, payload)
+    except ml_client.MLClientError as e:
+        return False, f"ML rechazó la publicación matriz: {e}", None, 0
+    except Exception as e:
+        return False, f"Error inesperado: {type(e).__name__}: {e}", None, 0
+
+    new_item_id = resp.get("id")
+    if not new_item_id:
+        return False, f"ML respondió sin id de item: {resp}", None, 0
+
+    # Mapear variation_id ML → SKU local. ML devuelve `variations[]` con
+    # cada variation_id y sus attribute_combinations — matcheamos por el
+    # value de medida.
+    ml_variations = resp.get("variations") or []
+    medida_to_var_id: dict[str, str] = {}
+    for mv in ml_variations:
+        for combo in mv.get("attribute_combinations") or []:
+            val_name = (combo.get("value_name") or "").strip().lower()
+            if val_name and combo.get("id") == var_attr.get("id"):
+                medida_to_var_id[val_name] = mv.get("id")
+                break
+
+    # Persistir en cada variante
+    for v in variants:
+        v.ml_item_id = new_item_id
+        v.ml_permalink = resp.get("permalink")
+        v.ml_status = resp.get("status")
+        medida = _get_medida_from_ficha(v).strip().lower()
+        v.ml_variation_id = medida_to_var_id.get(medida)
+        v.ml_stock = v.stock_actual
+        if v.precio_final is not None:
+            v.ml_precio = v.precio_final
+
+    # Cache de mapping de categoría si hay nuestra_categoria + venía de predict
+    if master.categoria and not ml_category_id_override:
+        existing = db.execute(
+            select(CategoriaMLMapping).where(
+                CategoriaMLMapping.nuestra_categoria == master.categoria
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(CategoriaMLMapping(
+                nuestra_categoria=master.categoria,
+                ml_category_id=ml_cat_id,
+                confirmado=False,
+            ))
+
+    db.commit()
+
+    # Descripción matriz: usamos la del master (igual para todas las variantes)
+    desc_warning = ""
+    descripcion_text = build_description_text(master)
+    if descripcion_text:
+        try:
+            ml_client.update_item_description(db, new_item_id, descripcion_text)
+        except Exception as e:
+            desc_warning = f" (descripción no se pudo setear: {e})"
+
+    msg = (
+        f"✓ Publicación matriz creada en ML como {new_item_id} "
+        f"con {len(variants)} variantes (status={resp.get('status')})"
+    )
+    if resp.get("permalink"):
+        msg += f" · {resp['permalink']}"
+    if desc_warning:
+        msg += desc_warning
+    return True, msg, new_item_id, len(variants)
+
+
+# =============================================================
 # Bulk
 # =============================================================
 
@@ -738,6 +1015,126 @@ def bulk_create(
 # =============================================================
 # Helpers para la UI
 # =============================================================
+
+# =============================================================
+# Variantes (publicaciones matriz)
+# =============================================================
+
+def _norm_titulo(s: str) -> str:
+    """Normaliza un título para matchear variantes: trim + colapso de espacios."""
+    if not s:
+        return ""
+    import re
+    return re.sub(r"\s+", " ", str(s).strip())
+
+
+def find_variants(db: Session, titulo: str, *, exclude_published: bool = False) -> list[Producto]:
+    """
+    Busca todos los productos activos cuyo título coincide con `titulo`
+    (después de normalización: trim + colapso de espacios).
+
+    Si N >= 2: se considera un grupo de variantes y se publican como matriz ML.
+    Si N == 1: producto único, publicación simple.
+
+    Si exclude_published=True, descarta los que ya tienen ml_item_id (útil
+    para el preflight masivo).
+    """
+    norm = _norm_titulo(titulo)
+    if not norm:
+        return []
+    q = (
+        select(Producto)
+        .options(selectinload(Producto.fotos))
+        .where(Producto.activo.is_(True))
+    )
+    if exclude_published:
+        q = q.where(Producto.ml_item_id.is_(None))
+    rows = list(db.execute(q).scalars().all())
+    # Filtramos en memoria por el título normalizado (más confiable que SQL
+    # case-insensitive con espacios variables).
+    return [p for p in rows if _norm_titulo(p.titulo or "") == norm]
+
+
+def find_variation_attribute(category_attrs: list[dict]) -> Optional[dict]:
+    """
+    Encuentra el atributo de la categoría ML que se usa para diferenciar
+    variantes (ej MEASUREMENT, SIZE_GROUP).
+
+    Estrategia:
+      1. Filtrar atributos con tags.allow_variations=True
+      2. Preferir uno cuyo nombre matchee "medida"/"size"/"medidas"/"diametro"
+      3. Fallback: el primero que admita variations
+    """
+    candidates = []
+    for a in category_attrs or []:
+        tags = a.get("tags") or {}
+        if tags.get("allow_variations") is True:
+            candidates.append(a)
+    if not candidates:
+        return None
+
+    from .catalogo import _norm_attr_key
+    preferidos = {"medida", "medidas", "size", "tamano", "talle", "diametro", "measurement"}
+    for c in candidates:
+        name_norm = _norm_attr_key(c.get("name") or "")
+        id_norm = (c.get("id") or "").lower()
+        if name_norm in preferidos or id_norm in preferidos:
+            return c
+    return candidates[0]
+
+
+def match_variation_value(
+    raw_value: str,
+    allowed_values: list[dict],
+) -> tuple[Optional[str], str]:
+    """
+    Matchea un valor de variante (ej "STD", "+0.30", "0.60") contra la lista
+    de valores aceptados de un atributo ML closed-list.
+
+    Devuelve (value_id_o_None, value_name_a_enviar).
+    Si no encuentra match en la lista cerrada, devuelve (None, raw_value)
+    — ML decide si lo acepta como free-text o lo rechaza.
+    """
+    raw = (raw_value or "").strip()
+    if not raw:
+        return None, ""
+
+    if not allowed_values:
+        return None, raw  # Atributo es free-text
+
+    raw_norm = raw.lower().replace(" ", "").replace("mm", "").replace(",", ".")
+
+    # 1) Match exacto por nombre (case-insensitive)
+    for v in allowed_values:
+        if (v.get("name") or "").strip().lower() == raw.lower():
+            return v.get("id"), v.get("name", raw)
+
+    # 2) Match normalizado: "+0.30 mm" == "+0.30"
+    for v in allowed_values:
+        v_norm = (v.get("name") or "").lower().replace(" ", "").replace("mm", "").replace(",", ".")
+        if v_norm == raw_norm:
+            return v.get("id"), v.get("name", raw)
+
+    # 3) Sin match → mandar como free-text (ML rechaza si la lista es cerrada
+    # estricta, pero la mayoría de los atributos numéricos aceptan)
+    return None, raw
+
+
+def _get_medida_from_ficha(producto: Producto) -> str:
+    """
+    Extrae el valor de 'medida' (o keys equivalentes) de la ficha técnica de
+    un producto. Útil para identificar qué variante es cada uno dentro del
+    grupo matriz.
+    """
+    ficha = producto.ficha_tecnica or {}
+    if not ficha:
+        return ""
+    candidatas = ("medida", "medidas", "size", "tamano", "talle", "diametro", "diametro_mm")
+    for k in candidatas:
+        if k in ficha and str(ficha[k] or "").strip():
+            return str(ficha[k]).strip()
+    return ""
+
 
 def get_publishable_products(db: Session, limit: int = 500) -> list[Producto]:
     """

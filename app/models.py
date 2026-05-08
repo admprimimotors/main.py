@@ -102,6 +102,11 @@ class Producto(Base):
     # ML_Permalink, ML_Status). El sync real con la API de ML se activa en una
     # fase posterior — por ahora son solo metadata para mostrar en el panel.
     ml_item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Si este producto es una variante dentro de una publicación matriz de ML,
+    # ml_variation_id guarda el ID de su variation específica. NULL = producto
+    # publicado como ítem simple (sin variantes) o todavía no publicado.
+    # Combinación (ml_item_id, ml_variation_id) identifica unívocamente la variante.
+    ml_variation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     ml_permalink: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     ml_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     # Snapshots de lo que ML reportó la última vez que sincronizamos.
