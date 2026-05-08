@@ -298,6 +298,29 @@ def _ficha_to_ml_attributes(
     return out
 
 
+def _derive_family_name(producto: Producto) -> str:
+    """
+    family_name: identificador de "familia de producto" en el catálogo de ML.
+
+    Cuando publicás en una categoría que tiene catálogo (la mayoría de
+    repuestos de auto, ej "Camisas de Motor"), ML pide este campo para
+    agrupar publicaciones equivalentes de distintos vendedores.
+
+    Estrategia:
+      - Usamos el título como base (suele ser descriptivo del producto +
+        compatibilidad vehicular, que es lo que define una familia).
+      - Cap a 60 chars — ML rechaza family_names muy largos.
+      - Sin caracteres raros que ML no acepta.
+    """
+    import re
+    base = (producto.titulo or producto.sku or "").strip()
+    # ML acepta letras, números, espacios, /, -, ., comas, paréntesis y &.
+    # Removemos comillas y otros raros que a veces dan problema.
+    cleaned = re.sub(r'["\'`*<>]', "", base)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:60]
+
+
 def _photo_urls(producto: Producto) -> list[dict]:
     """Lista de URLs de fotos en el formato que espera ML: [{"source": url}, ...]."""
     return [
@@ -373,6 +396,9 @@ def build_create_payload(
             producto.ficha_tecnica or {}, category_attrs
         ),
         "status": initial_status,
+        # family_name: requerido por ML para categorías con catálogo (la mayoría
+        # de repuestos auto). Si la categoría no lo necesita, ML lo ignora.
+        "family_name": _derive_family_name(producto),
     }
 
     # Descripción se manda en endpoint separado después del POST. La incluimos
