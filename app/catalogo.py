@@ -1623,7 +1623,10 @@ def push_to_ml(
         actions.append("stock")
     if push_price and prod.precio_final is not None:
         actions.append("precio")
-    if push_description and (prod.descripcion or "").strip():
+    # Description: si push_description está activo, siempre pusheamos. Usamos
+    # la descripción manual si está cargada; si no, autogeneramos desde
+    # ficha técnica + compats (fallback). Nunca mandamos vacío.
+    if push_description:
         actions.append("descripcion")
     if push_attributes and attr_changes:
         actions.append("atributos")
@@ -1666,13 +1669,19 @@ def push_to_ml(
             errors.append(f"precio falló: {e}")
 
     if "descripcion" in actions:
-        try:
-            ml_client.update_item_description(
-                db, prod.ml_item_id, (prod.descripcion or "").strip()
-            )
-            msgs.append("descripción")
-        except ml_client.MLClientError as e:
-            errors.append(f"descripción falló: {e}")
+        # Lazy import para evitar circular (ml_publisher importa catalogo)
+        from . import ml_publisher
+        descripcion_text = ml_publisher.build_description_text(prod)
+        if not descripcion_text:
+            errors.append("descripción vacía: ni texto cargado ni ficha para autogenerar")
+        else:
+            try:
+                ml_client.update_item_description(db, prod.ml_item_id, descripcion_text)
+                # Indicamos en el mensaje si fue manual o autogenerada
+                fuente = "manual" if (prod.descripcion or "").strip() else "auto-ficha"
+                msgs.append(f"descripción ({fuente})")
+            except ml_client.MLClientError as e:
+                errors.append(f"descripción falló: {e}")
 
     if "atributos" in actions:
         try:

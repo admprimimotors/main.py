@@ -434,14 +434,85 @@ def build_create_payload(
     if not is_catalog:
         payload["title"] = (producto.titulo or "").strip()[:60]
 
-    # Descripción se manda en endpoint separado después del POST. La incluimos
-    # acá también porque algunas categorías ML aceptan `description` inline
-    # en el POST inicial — si no, igual llamamos PUT /items/{id}/description.
-    if (producto.descripcion or "").strip():
-        # ML quiere {plain_text: "..."} acá
-        payload["description"] = {"plain_text": producto.descripcion.strip()}
+    # NOTA: la descripción ya no se manda en el POST. ML la maneja como un
+    # endpoint separado (PUT /items/{id}/description). Lo hacemos en
+    # `create_publication` después del POST. Si la mandás inline, ML a veces
+    # la ignora silenciosamente para categorías con catálogo.
 
     return payload
+
+
+def build_description_text(producto: Producto) -> str:
+    """
+    Arma una descripción plain-text para mandar a ML cuando hace falta:
+      - Si el producto tiene `descripcion` cargada → la usamos tal cual.
+      - Si no → autogeneramos a partir del título + ficha técnica +
+        compatibilidades vehiculares + footer estándar.
+
+    El texto resultante es plain-text con saltos de línea (ML acepta
+    plain_text vía PUT /items/{id}/description).
+    """
+    # Caso simple: descripción cargada manualmente
+    custom = (producto.descripcion or "").strip()
+    if custom:
+        return custom
+
+    # Fallback: armar desde ficha técnica + compats
+    lines: list[str] = []
+
+    if producto.titulo:
+        lines.append(producto.titulo.strip())
+        lines.append("")
+
+    ficha = producto.ficha_tecnica or {}
+    if ficha:
+        lines.append("FICHA TÉCNICA")
+        lines.append("─" * 30)
+        for k, v in ficha.items():
+            if v is None or str(v).strip() == "":
+                continue
+            label = str(k).replace("_", " ").upper()
+            lines.append(f"• {label}: {v}")
+        lines.append("")
+
+    # Compatibilidades vehiculares (si existen)
+    try:
+        compats = list(producto.compatibilidades or [])
+    except Exception:
+        compats = []
+    if compats:
+        lines.append("COMPATIBILIDADES VEHICULARES")
+        lines.append("─" * 30)
+        for c in compats:
+            try:
+                v = c.vehiculo
+            except Exception:
+                continue
+            partes = [v.marca, v.modelo]
+            anio_range = ""
+            if v.anio_desde and v.anio_hasta and v.anio_desde != v.anio_hasta:
+                anio_range = f" ({v.anio_desde}-{v.anio_hasta})"
+            elif v.anio_desde:
+                anio_range = f" ({v.anio_desde}-)"
+            elif v.anio_hasta:
+                anio_range = f" (-{v.anio_hasta})"
+            motor = ""
+            if v.cilindrada_cc:
+                motor = f" {v.cilindrada_cc}cc"
+            if v.combustible:
+                motor += f" {v.combustible}"
+            line = "• " + " ".join(p for p in partes if p) + anio_range + motor
+            if c.notas:
+                line += f" — {c.notas}"
+            lines.append(line)
+        lines.append("")
+
+    # Footer estándar
+    lines.append("─" * 30)
+    lines.append("PRIMI MOTORS")
+    lines.append("Garantía 30 días de fábrica · Envío gratis con FLEX (CABA y GBA)")
+
+    return "\n".join(lines).strip()
 
 
 # =============================================================
@@ -550,6 +621,18 @@ def create_publication(
     # Snapshot de los atributos como ML los devolvió (ya con value_id resueltos)
     prod.ml_raw_attributes = resp.get("attributes") or []
 
+    # Descripción: PUT separado a /items/{id}/description.
+    # Si falla no es fatal — la publicación ya existe, podemos reintentar después.
+    desc_warning = ""
+    descripcion_text = build_description_text(prod)
+    if descripcion_text:
+        try:
+            ml_client.update_item_description(db, new_id, descripcion_text)
+        except ml_client.MLClientError as e:
+            desc_warning = f" (descripción no se pudo setear: {e})"
+        except Exception as e:
+            desc_warning = f" (descripción falló: {type(e).__name__})"
+
     # Si recién mapeamos esta categoría por predictor (sin row en mapping),
     # la guardamos como cache no-confirmada para futuros productos de la misma
     # categoría interna.
@@ -572,6 +655,8 @@ def create_publication(
     msg = f"✓ Publicado en ML como {new_id} (status={resp.get('status')})"
     if resp.get("permalink"):
         msg += f" · {resp['permalink']}"
+    if desc_warning:
+        msg += desc_warning
     return True, msg, new_id
 
 
