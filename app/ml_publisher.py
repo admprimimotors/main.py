@@ -360,6 +360,19 @@ def _sale_terms_block() -> list[dict]:
     ]
 
 
+def is_catalog_category(db: Session, category_id: str) -> bool:
+    """
+    Determina si una categoría ML usa el sistema de catálogo de productos.
+    En categorías-catálogo, ML genera el título automáticamente desde la
+    familia + atributos, y rechaza si vos mandás el campo `title`.
+
+    Detección: la categoría tiene `settings.catalog_domain` no-vacío.
+    """
+    cat = ml_client.get_category(db, category_id) or {}
+    settings = cat.get("settings") or {}
+    return bool(settings.get("catalog_domain"))
+
+
 def build_create_payload(
     producto: Producto,
     *,
@@ -367,21 +380,19 @@ def build_create_payload(
     category_attrs: list[dict],
     listing_type_id: Optional[str] = None,
     initial_status: Optional[str] = None,
+    is_catalog: bool = False,
 ) -> dict:
     """
     Arma el dict de payload para POST /items.
 
-    Asume que ya pasó `validate_ready` con lista vacía — si falta algo no
-    revalidamos acá.
+    Si `is_catalog=True`, omitimos `title` (ML lo deriva del catálogo) y
+    obligatoriamente mandamos `family_name`. Si False, mandamos `title` y
+    `family_name` queda como hint (ML lo ignora si no aplica).
     """
     listing_type_id = listing_type_id or DEFAULT_LISTING_TYPE
     initial_status = initial_status or DEFAULT_INITIAL_STATUS
 
-    # Título: ML máximo 60 chars (validate_ready ya lo chequeó).
-    titulo = (producto.titulo or "").strip()[:60]
-
     payload: dict = {
-        "title": titulo,
         "category_id": ml_category_id,
         "price": float(producto.precio_final or 0),
         "currency_id": DEFAULT_CURRENCY,
@@ -396,10 +407,15 @@ def build_create_payload(
             producto.ficha_tecnica or {}, category_attrs
         ),
         "status": initial_status,
-        # family_name: requerido por ML para categorías con catálogo (la mayoría
-        # de repuestos auto). Si la categoría no lo necesita, ML lo ignora.
+        # family_name: requerido por ML para categorías con catálogo. Si la
+        # categoría no es de catálogo, ML lo ignora silenciosamente.
         "family_name": _derive_family_name(producto),
     }
+
+    # Title: solo si NO es catálogo. En catálogo ML lo genera a partir de la
+    # familia + atributos y rechaza si vos lo mandás.
+    if not is_catalog:
+        payload["title"] = (producto.titulo or "").strip()[:60]
 
     # Descripción se manda en endpoint separado después del POST. La incluimos
     # acá también porque algunas categorías ML aceptan `description` inline
@@ -473,6 +489,9 @@ def create_publication(
     category_attrs = ml_client.get_category_attributes(db, ml_cat_id)
     req_attrs = required_attributes(category_attrs)
 
+    # ¿Es categoría de catálogo? Determina si mandamos title o no.
+    is_cat = is_catalog_category(db, ml_cat_id)
+
     # Pre-flight
     problems = validate_ready(
         prod, ml_category_id=ml_cat_id, required_attrs=req_attrs
@@ -487,6 +506,7 @@ def create_publication(
         category_attrs=category_attrs,
         listing_type_id=listing_type_id,
         initial_status=initial_status,
+        is_catalog=is_cat,
     )
 
     try:
