@@ -82,6 +82,15 @@ PRODUCTO_COL_ALIASES: dict[str, str] = {
     "ml_impuestos_pct": "ml_impuestos_pct",
     "impuestos_pct": "ml_impuestos_pct",
     "impuestos": "ml_impuestos_pct",
+    # URLs de fotos. Aceptamos varios separadores en la celda (`;`, `,`, `\n`).
+    # No van a ficha_tecnica — se procesan post-upsert para crear FotoProducto.
+    "fotos": "fotos_urls",
+    "foto": "fotos_urls",
+    "fotos_url": "fotos_urls",
+    "imagenes": "fotos_urls",
+    "imagen": "fotos_urls",
+    "pictures": "fotos_urls",
+    "pictures_url": "fotos_urls",
 }
 
 COMPAT_COL_ALIASES: dict[str, str] = {
@@ -297,6 +306,8 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
     # Construir filas para el upsert
     rows: list[dict] = []
     seen_skus: set[str] = set()
+    # Mapping paralelo SKU → URLs de fotos (procesado post-upsert)
+    fotos_por_sku: dict[str, list[str]] = {}
     for idx, row in df.iterrows():
         sku = _parse_str(row.get(sku_col))
         if not sku:
@@ -325,6 +336,14 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             return row.get(col) if col else None
 
         titulo = _parse_str(_g("titulo")) or sku
+
+        # URLs de fotos (separadas por ;, , o newline)
+        fotos_raw = _parse_str(_g("fotos_urls"))
+        if fotos_raw:
+            urls = _parse_fotos_urls(fotos_raw)
+            if urls:
+                fotos_por_sku[sku] = urls
+
         rows.append({
             "sku": sku,
             "titulo": titulo,
@@ -394,6 +413,81 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
 
     result.productos_insertados = len(rows) - len(existing_skus)
     result.productos_actualizados = len(existing_skus)
+
+    # ----- Fotos por URL (post-upsert) -----
+    if fotos_por_sku:
+        try:
+            n_fotos = _attach_fotos_from_urls(db, fotos_por_sku)
+            if n_fotos:
+                result.errores.append(
+                    f"ℹ {n_fotos} foto{'s' if n_fotos != 1 else ''} cargada{'s' if n_fotos != 1 else ''} desde URLs del Excel."
+                )
+        except Exception as e:
+            result.errores.append(f"Error procesando fotos por URL: {type(e).__name__}: {e}")
+
+
+def _parse_fotos_urls(raw: str) -> list[str]:
+    """
+    Parsea el contenido de la celda fotos: separadores `;`, `,`, salto de línea
+    o pipe `|`. Filtra a URLs http/https válidas. Dedupe preservando orden.
+    """
+    import re
+    if not raw:
+        return []
+    parts = re.split(r"[;,|\n\r\t]+", str(raw))
+    urls: list[str] = []
+    seen = set()
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if not (p.startswith("http://") or p.startswith("https://")):
+            continue
+        if p in seen:
+            continue
+        seen.add(p)
+        urls.append(p)
+    return urls
+
+
+def _attach_fotos_from_urls(db: Session, fotos_por_sku: dict[str, list[str]]) -> int:
+    """
+    Para cada SKU con URLs en la celda fotos, reemplaza las fotos existentes
+    con las nuevas (delete + insert). Las URLs externas se guardan tal cual
+    en `url`; usamos un storage_key sintético `external/{sku}/{i}` para
+    identificar que NO están en R2.
+
+    Devuelve la cantidad total de FotoProducto insertadas.
+    """
+    if not fotos_por_sku:
+        return 0
+    skus = list(fotos_por_sku.keys())
+    sku_to_id = {
+        sku: pid
+        for pid, sku in db.execute(
+            select(Producto.id, Producto.sku).where(Producto.sku.in_(skus))
+        ).all()
+    }
+    total = 0
+    for sku, urls in fotos_por_sku.items():
+        prod_id = sku_to_id.get(sku)
+        if prod_id is None:
+            continue
+        # Borramos las existentes (asumimos: el Excel es la fuente de verdad
+        # cuando trae la columna fotos)
+        db.query(FotoProducto).filter(FotoProducto.producto_id == prod_id).delete(
+            synchronize_session=False
+        )
+        for i, url in enumerate(urls):
+            db.add(FotoProducto(
+                producto_id=prod_id,
+                storage_key=f"external/{sku}/{i}",
+                url=url,
+                orden=i,
+            ))
+            total += 1
+    db.commit()
+    return total
 
 
 # =============================================================

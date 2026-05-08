@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.30.0"
+APP_VERSION = "0.31.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1384,13 +1384,6 @@ def api_ml_category_preflight(
     cat_attrs = ml_client.get_category_attributes(db, category_id) or []
     is_cat = ml_publisher.is_catalog_category(db, category_id)
 
-    ficha = prod.ficha_tecnica or {}
-    ficha_norm = {
-        catalogo._norm_attr_key(k): (k, v)
-        for k, v in ficha.items()
-        if v is not None
-    }
-
     out_attrs = []
     n_required = 0
     n_missing = 0
@@ -1403,23 +1396,27 @@ def api_ml_category_preflight(
             continue  # Solo nos interesan los obligatorios
         n_required += 1
 
-        # Match: probamos por id_lowercase, id_normalizado, nombre_normalizado
+        # Resolvemos via el helper (mira producto.marca para BRAND, etc.,
+        # y luego ficha_tecnica). Devuelve el valor en string o None.
+        found_val = ml_publisher.get_producto_attr_value(prod, attr_id, attr_name)
+
+        # Para mostrar de dónde vino el valor (campo dedicado vs key de ficha)
         found_key = None
-        found_val = None
-        for cand in (
-            attr_id.lower(),
-            catalogo._norm_attr_key(attr_id),
-            catalogo._norm_attr_key(attr_name),
-        ):
-            if not cand:
-                continue
-            if cand in ficha_norm:
-                orig_key, val = ficha_norm[cand]
-                str_val = str(val).strip()
-                if str_val:
-                    found_key = orig_key
-                    found_val = str_val
-                    break
+        if found_val is not None:
+            field = catalogo._ML_ATTR_TO_FIELD.get((attr_id or "").upper())
+            if field and getattr(prod, field, None):
+                found_key = field  # ej "marca" → indica que vino del campo del producto
+            else:
+                # vino de ficha — buscar la key original
+                ficha = prod.ficha_tecnica or {}
+                for k in ficha.keys():
+                    if catalogo._norm_attr_key(k) in (
+                        attr_id.lower(),
+                        catalogo._norm_attr_key(attr_id),
+                        catalogo._norm_attr_key(attr_name),
+                    ):
+                        found_key = k
+                        break
 
         if found_val is None:
             n_missing += 1
@@ -1441,6 +1438,11 @@ def api_ml_category_preflight(
             "in_ficha": found_val is not None,
             "ficha_value": found_val,
             "ficha_key": found_key,
+            # True si el valor vino de un campo dedicado (ej producto.marca)
+            "from_product_field": found_val is not None and (
+                catalogo._ML_ATTR_TO_FIELD.get((attr_id or "").upper())
+                == found_key
+            ),
             "required": True,
         })
 

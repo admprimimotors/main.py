@@ -204,32 +204,16 @@ def validate_ready(
 
     # Atributos obligatorios de la categoría
     if required_attrs:
-        ficha = producto.ficha_tecnica or {}
-        # Las keys en ficha están normalizadas (snake_case ASCII). Para
-        # matchear con los IDs ML (típicamente UPPER_SNAKE como BRAND, MODEL),
-        # comparamos por: id ML directo, id ML lowercase, name normalizado.
-        ficha_keys_ci = {k.lower(): k for k in ficha.keys()}
         for attr in required_attrs:
             attr_id = attr.get("id") or ""
             attr_name = attr.get("name") or ""
-            # Buscamos el valor en la ficha por: id_lowercase, o nombre_normalizado
-            from .catalogo import _norm_attr_key
-            candidates = [
-                attr_id.lower(),
-                _norm_attr_key(attr_name),
-                _norm_attr_key(attr_id),
-            ]
-            found = False
-            for cand in candidates:
-                if not cand:
-                    continue
-                if cand in ficha_keys_ci and (ficha[ficha_keys_ci[cand]] or "").strip():
-                    found = True
-                    break
-            if not found:
+            # Resolvemos vía helper que mira primero el campo dedicado del
+            # producto (BRAND → producto.marca) y después la ficha_tecnica.
+            value = get_producto_attr_value(producto, attr_id, attr_name)
+            if not value:
                 problems.append(
                     f"Falta atributo obligatorio '{attr_name or attr_id}' "
-                    f"en ficha técnica."
+                    f"(ni en ficha técnica ni en campos del producto)."
                 )
 
     return problems
@@ -258,43 +242,66 @@ def required_attributes(attrs: list[dict]) -> list[dict]:
 # Construcción del payload
 # =============================================================
 
+def get_producto_attr_value(producto: Producto, attr_id: str, attr_name: str) -> Optional[str]:
+    """
+    Resuelve el valor de un atributo ML para un producto, buscando en:
+
+      1. **Campo dedicado** del Producto (vía _ML_ATTR_TO_FIELD).
+         Ejemplo: ML pide BRAND → leemos producto.marca (no ficha_tecnica.marca).
+      2. **ficha_tecnica** matcheando por id_lowercase, id_normalizado o
+         nombre_normalizado.
+
+    Devuelve el valor como string trim, o None si no encontramos nada.
+    """
+    from .catalogo import _ML_ATTR_TO_FIELD, _norm_attr_key
+
+    attr_id_up = (attr_id or "").upper()
+    attr_id_lo = (attr_id or "").lower()
+
+    # 1) Campo dedicado del producto
+    field = _ML_ATTR_TO_FIELD.get(attr_id_up)
+    if field:
+        val = getattr(producto, field, None)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+
+    # 2) ficha_tecnica
+    ficha = producto.ficha_tecnica or {}
+    if not ficha:
+        return None
+    ficha_norm = {_norm_attr_key(k): v for k, v in ficha.items() if v is not None}
+    for cand in (attr_id_lo, _norm_attr_key(attr_id), _norm_attr_key(attr_name)):
+        if not cand:
+            continue
+        if cand in ficha_norm:
+            v = str(ficha_norm[cand]).strip()
+            if v:
+                return v
+    return None
+
+
 def _ficha_to_ml_attributes(
-    ficha: dict,
+    producto: Producto,
     category_attrs: list[dict],
 ) -> list[dict]:
     """
-    Convierte ficha_tecnica local en el array `attributes` que espera
-    POST /items. Para cada atributo definido por la categoría ML, busca el
-    valor correspondiente en la ficha (matcheando por id o nombre normalizado)
-    y lo agrega como {id, value_name}.
+    Convierte los atributos del producto (campos dedicados + ficha_tecnica)
+    en el array `attributes` que espera POST /items.
 
-    Si la ficha tiene atributos extras que NO están en la categoría, los
-    ignora (ML los rechaza en POST).
+    Para cada atributo definido por la categoría ML, busca el valor usando
+    `get_producto_attr_value` que mira primero los campos dedicados del producto
+    (BRAND → producto.marca) y luego ficha_tecnica.
     """
-    from .catalogo import _norm_attr_key
-
-    if not ficha or not category_attrs:
+    if not category_attrs:
         return []
-
-    ficha_norm = {_norm_attr_key(k): v for k, v in ficha.items() if v is not None}
     out: list[dict] = []
-
     for attr in category_attrs:
         attr_id = attr.get("id") or ""
-        attr_name = attr.get("name") or ""
         if not attr_id:
             continue
-
-        # Probamos matchear por: id_lowercase, id_normalizado, nombre_normalizado
-        for cand in (attr_id.lower(), _norm_attr_key(attr_id), _norm_attr_key(attr_name)):
-            if not cand:
-                continue
-            if cand in ficha_norm:
-                value = str(ficha_norm[cand]).strip()
-                if value:
-                    out.append({"id": attr_id, "value_name": value})
-                break
-
+        value = get_producto_attr_value(producto, attr_id, attr.get("name") or "")
+        if value:
+            out.append({"id": attr_id, "value_name": value})
     return out
 
 
@@ -420,9 +427,7 @@ def build_create_payload(
         "pictures": _photo_urls(producto),
         "shipping": _shipping_block(producto.precio_final or Decimal("0")),
         "sale_terms": _sale_terms_block(),
-        "attributes": _ficha_to_ml_attributes(
-            producto.ficha_tecnica or {}, category_attrs
-        ),
+        "attributes": _ficha_to_ml_attributes(producto, category_attrs),
         "status": initial_status,
         # family_name: requerido por ML para categorías con catálogo. Si la
         # categoría no es de catálogo, ML lo ignora silenciosamente.
@@ -698,7 +703,7 @@ def build_matrix_payload(
     # Atributos compartidos (a nivel item) — sacamos del primero. No mandamos
     # acá el atributo que varía (ese va a attribute_combinations).
     item_attrs = [
-        a for a in _ficha_to_ml_attributes(master.ficha_tecnica or {}, category_attrs)
+        a for a in _ficha_to_ml_attributes(master, category_attrs)
         if a.get("id") != var_attr_id
     ]
 
