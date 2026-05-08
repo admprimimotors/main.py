@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.27.1"
+APP_VERSION = "0.27.2"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1364,6 +1364,15 @@ def catalogo_publicar_form(
         prod, ml_category_id=ml_cat_id, required_attrs=req_attrs
     )
 
+    # Pre-flight "básico" (sin categoría ni atributos): los chequeos que no
+    # dependen de qué categoría ML se elija. Lo usamos para que el botón
+    # Publicar se habilite client-side apenas el usuario elige una categoría
+    # en el buscador (sin requerir reload de página).
+    problems_basic = ml_publisher.validate_ready(
+        prod, ml_category_id="__DUMMY__", required_attrs=[]
+    )
+    other_checks_pass = len(problems_basic) == 0
+
     flash = request.session.pop("flash", None)
     return templates.TemplateResponse(
         request,
@@ -1379,6 +1388,7 @@ def catalogo_publicar_form(
             "required_attrs": req_attrs,
             "problems": problems,
             "ready_to_publish": len(problems) == 0,
+            "other_checks_pass": other_checks_pass,
             "ml_write_enabled": ml_client.is_write_enabled(),
             "default_listing_type": ml_publisher.DEFAULT_LISTING_TYPE,
             "default_initial_status": ml_publisher.DEFAULT_INITIAL_STATUS,

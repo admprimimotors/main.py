@@ -336,13 +336,58 @@
   <div class="form-actions">
     <a href="/catalogo/{{ producto.sku|urlencode }}" class="btn btn-ghost">Cancelar</a>
     <button type="submit" class="btn" id="publish-btn"
-            {% if not ready_to_publish or not ml_write_enabled %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}>
+            data-other-pass="{{ 'true' if other_checks_pass else 'false' }}"
+            data-write-enabled="{{ 'true' if ml_write_enabled else 'false' }}">
       ✚ Publicar en ML
     </button>
   </div>
 </form>
 
 <script>
+// ---------- Habilitar/deshabilitar el botón Publicar según categoría elegida ----------
+function refreshPublishBtnState() {
+  const btn = document.getElementById('publish-btn');
+  if (!btn) return;
+  const otherPass    = btn.dataset.otherPass === 'true';
+  const writeEnabled = btn.dataset.writeEnabled === 'true';
+
+  // Buscamos el valor actual de ml_category_id en cualquiera de las 3 paths:
+  // (a) radios con name=ml_category_id (cuando hubo candidatos)
+  // (b) hidden input #ml_category_id (cuando no hubo candidatos → buscador)
+  // (c) hidden input por nombre (cuando vino de mapping guardado)
+  let catValue = '';
+  const radios = document.querySelectorAll('input[type=radio][name=ml_category_id]');
+  if (radios.length) {
+    const checked = Array.from(radios).find(r => r.checked);
+    if (checked) catValue = checked.value;
+  }
+  if (!catValue) {
+    const hid = document.getElementById('ml_category_id') || document.querySelector('input[name=ml_category_id]');
+    if (hid) catValue = (hid.value || '').trim();
+  }
+
+  const enable = otherPass && writeEnabled && catValue !== '';
+  btn.disabled = !enable;
+  btn.style.opacity = enable ? '1' : '0.5';
+  btn.style.cursor = enable ? '' : 'not-allowed';
+  btn.title = enable
+    ? 'Publicar este producto en Mercado Libre'
+    : (!writeEnabled
+        ? 'ML_SYNC_WRITE_ENABLED no está activo en Render'
+        : !otherPass
+          ? 'Faltan campos básicos del producto (título/precio/stock/fotos)'
+          : 'Falta elegir categoría ML');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refreshPublishBtnState();
+  // Si hay radios de candidatos, escuchamos cambios
+  document.querySelectorAll('input[type=radio][name=ml_category_id]').forEach(r => {
+    r.addEventListener('change', refreshPublishBtnState);
+  });
+});
+
+// ---------- Buscador de categorías ML (cuando no hay candidatos) ----------
 (function() {
   const input = document.getElementById('cat-search-input');
   const resultsEl = document.getElementById('cat-search-results');
@@ -423,12 +468,14 @@
     resultsEl.innerHTML = '';
     input.value = '';
     setStatus('');
+    refreshPublishBtnState();
   }
 
   window.clearCategory = function() {
     hiddenInput.value = '';
     selectedWrap.style.display = 'none';
     if (manualInput) manualInput.value = '';
+    refreshPublishBtnState();
   };
 
   window.useManualId = function(val) {
