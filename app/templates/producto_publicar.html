@@ -282,6 +282,19 @@
     </details>
   {% endif %}
 
+  <!-- Panel de pre-flight dinámico — se llena por AJAX al elegir categoría -->
+  <div id="cat-preflight-panel" style="display: none; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-soft);">
+    <div class="card-title" style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+      <span>Atributos requeridos por esta categoría</span>
+      <span id="cat-preflight-summary" style="font-size: 11px; font-weight: normal;"></span>
+    </div>
+    <div id="cat-preflight-status" style="font-size: 12px; color: var(--muted); margin-bottom: 10px;">
+      Cargando atributos…
+    </div>
+    <div id="cat-preflight-list"></div>
+    <div id="cat-preflight-action" style="margin-top: 10px; font-size: 12px;"></div>
+  </div>
+
   {% if producto.categoria and candidatos %}
   <label style="display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--muted-strong);">
     <input type="checkbox" name="confirmar_categoria" value="on" />
@@ -290,48 +303,9 @@
   </label>
   {% endif %}
 
-  <!-- Atributos requeridos por la categoría -->
-  {% if required_attrs %}
-  <div style="margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-soft);">
-    <div class="card-title" style="margin-bottom: 8px;">
-      Atributos obligatorios de esta categoría ({{ required_attrs|length }})
-    </div>
-    <p style="font-size: 12px; color: var(--muted); margin-bottom: 10px;">
-      Estos atributos los exige ML para esta categoría. Verificamos contra la
-      ficha técnica del producto. Lo que falta lo tenés que cargar antes de publicar.
-    </p>
-    <table class="attr-table">
-      <thead>
-        <tr>
-          <th>Atributo</th>
-          <th>ID ML</th>
-          <th>Estado</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for a in required_attrs %}
-          {% set attr_norm = (a.id|lower) %}
-          {% set ficha_keys_lower = (producto.ficha_tecnica or {}).keys()|map('lower')|list %}
-          {% set has_value = attr_norm in ficha_keys_lower %}
-          <tr>
-            <td>{{ a.name }}</td>
-            <td><code style="font-size: 11px; color: var(--muted);">{{ a.id }}</code></td>
-            <td>
-              {% if has_value %}
-                <span class="pill pill-ok">✓ En ficha</span>
-              {% else %}
-                <span class="pill pill-miss">✗ Falta</span>
-              {% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    <p style="font-size: 12px; color: var(--muted); margin-top: 10px;">
-      <a href="/catalogo/{{ producto.sku|urlencode }}/ficha" style="color: var(--brand-hover);">→ Editar ficha técnica</a>
-    </p>
-  </div>
-  {% endif %}
+  <!-- Pre-flight estático eliminado: ahora se renderiza dinámicamente vía AJAX
+       en #cat-preflight-panel apenas se elige categoría. -->
+
 
   <div class="form-actions">
     <a href="/catalogo/{{ producto.sku|urlencode }}" class="btn btn-ghost">Cancelar</a>
@@ -383,9 +357,142 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshPublishBtnState();
   // Si hay radios de candidatos, escuchamos cambios
   document.querySelectorAll('input[type=radio][name=ml_category_id]').forEach(r => {
-    r.addEventListener('change', refreshPublishBtnState);
+    r.addEventListener('change', () => {
+      refreshPublishBtnState();
+      loadCategoryPreflight(r.value);
+    });
   });
+  // Si la página vino con un mapping ya guardado, dispara el preflight
+  const initialCat = document.getElementById('ml_category_id') || document.querySelector('input[name=ml_category_id]');
+  if (initialCat && (initialCat.value || '').trim()) {
+    loadCategoryPreflight(initialCat.value.trim());
+  }
 });
+
+// ---------- Preflight de atributos por categoría (AJAX) ----------
+const PRODUCT_SKU = {{ producto.sku|tojson }};
+let preflightAbortController = null;
+
+async function loadCategoryPreflight(categoryId) {
+  if (!categoryId) return;
+  const panel = document.getElementById('cat-preflight-panel');
+  const statusEl = document.getElementById('cat-preflight-status');
+  const listEl = document.getElementById('cat-preflight-list');
+  const summaryEl = document.getElementById('cat-preflight-summary');
+  const actionEl = document.getElementById('cat-preflight-action');
+  if (!panel) return;
+
+  panel.style.display = 'block';
+  statusEl.textContent = 'Cargando atributos requeridos…';
+  listEl.innerHTML = '';
+  summaryEl.textContent = '';
+  actionEl.innerHTML = '';
+
+  // Cancelar request anterior si está en vuelo
+  if (preflightAbortController) preflightAbortController.abort();
+  preflightAbortController = new AbortController();
+
+  try {
+    const url = `/api/ml/category-preflight?sku=${encodeURIComponent(PRODUCT_SKU)}&category_id=${encodeURIComponent(categoryId)}`;
+    const resp = await fetch(url, { signal: preflightAbortController.signal });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    renderPreflight(data);
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    statusEl.textContent = 'Error cargando atributos: ' + e.message;
+  }
+}
+
+function renderPreflight(data) {
+  const statusEl = document.getElementById('cat-preflight-status');
+  const listEl = document.getElementById('cat-preflight-list');
+  const summaryEl = document.getElementById('cat-preflight-summary');
+  const actionEl = document.getElementById('cat-preflight-action');
+
+  if (data.n_required === 0) {
+    statusEl.textContent = data.is_catalog
+      ? 'Esta categoría usa catálogo de ML. Sin atributos obligatorios extra detectados, podés intentar publicar.'
+      : 'Esta categoría no tiene atributos obligatorios.';
+    summaryEl.innerHTML = '<span class="pill pill-ok">Sin requisitos extra</span>';
+    return;
+  }
+
+  if (data.ready) {
+    statusEl.textContent = `✓ Tenés cargados los ${data.n_required} atributo${data.n_required === 1 ? '' : 's'} obligatorio${data.n_required === 1 ? '' : 's'} de esta categoría.`;
+    summaryEl.innerHTML = `<span class="pill pill-ok">${data.n_required}/${data.n_required} OK</span>`;
+  } else {
+    statusEl.textContent = `Faltan ${data.n_missing} de ${data.n_required} atributo${data.n_required === 1 ? '' : 's'} obligatorio${data.n_required === 1 ? '' : 's'} para esta categoría.`;
+    summaryEl.innerHTML = `<span class="pill pill-miss">${data.n_missing} sin cargar</span>`;
+  }
+  if (data.is_catalog) {
+    summaryEl.innerHTML += ' <span class="pill" style="background: rgba(59,130,246,.12); color: #93c5fd; border: 1px solid rgba(59,130,246,.30); margin-left: 6px;">CATÁLOGO ML</span>';
+  }
+
+  // Tabla de atributos
+  let html = `
+    <table class="attr-table">
+      <thead>
+        <tr>
+          <th>Atributo</th>
+          <th>ID ML</th>
+          <th>Valor en ficha</th>
+          <th>Estado</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+  for (const a of data.attrs) {
+    let valueDisplay;
+    if (a.in_ficha) {
+      valueDisplay = `<span style="color: var(--text);">${escapeHtmlSafe(a.ficha_value)}</span>`;
+      if (a.ficha_key && a.ficha_key.toLowerCase() !== a.id.toLowerCase()) {
+        valueDisplay += ` <span style="font-size: 10px; color: var(--muted);">(en ficha como <code>${escapeHtmlSafe(a.ficha_key)}</code>)</span>`;
+      }
+    } else {
+      // Mostramos hasta 5 valores aceptados como hint
+      let hint = '';
+      if (a.values && a.values.length) {
+        const sample = a.values.slice(0, 4).map(v => v.name).filter(Boolean).join(', ');
+        if (sample) hint = `<div style="font-size: 10px; color: var(--muted); margin-top: 2px;">Ej: ${escapeHtmlSafe(sample)}${a.values.length > 4 ? '…' : ''}</div>`;
+      }
+      valueDisplay = `<span style="color: var(--muted);">— sin cargar —</span>${hint}`;
+    }
+    html += `
+      <tr>
+        <td><strong>${escapeHtmlSafe(a.name)}</strong></td>
+        <td><code style="font-size: 11px; color: var(--muted);">${escapeHtmlSafe(a.id)}</code></td>
+        <td>${valueDisplay}</td>
+        <td>
+          ${a.in_ficha
+            ? '<span class="pill pill-ok">✓ OK</span>'
+            : '<span class="pill pill-miss">✗ Falta</span>'}
+        </td>
+      </tr>
+    `;
+  }
+  html += '</tbody></table>';
+  listEl.innerHTML = html;
+
+  // Acción: si faltan atributos, ofrecer link directo al editor de ficha
+  if (data.n_missing > 0) {
+    const fichaUrl = `/catalogo/${encodeURIComponent(PRODUCT_SKU)}/ficha`;
+    actionEl.innerHTML = `
+      <div style="padding: 10px 14px; border-radius: 8px; background: rgba(245,158,11,.10); border: 1px solid rgba(245,158,11,.40); color: #fcd34d;">
+        Cargá los atributos faltantes en la ficha técnica antes de publicar.
+        <a href="${fichaUrl}" style="color: #fcd34d; text-decoration: underline; margin-left: 6px;">→ Ir a editar ficha técnica</a>
+      </div>
+    `;
+  } else {
+    actionEl.innerHTML = '';
+  }
+}
+
+function escapeHtmlSafe(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
 
 // ---------- Buscador de categorías ML (cuando no hay candidatos) ----------
 (function() {
@@ -469,6 +576,9 @@ document.addEventListener('DOMContentLoaded', () => {
     input.value = '';
     setStatus('');
     refreshPublishBtnState();
+    if (typeof loadCategoryPreflight === 'function') {
+      loadCategoryPreflight(cat.id);
+    }
   }
 
   window.clearCategory = function() {
@@ -476,6 +586,8 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedWrap.style.display = 'none';
     if (manualInput) manualInput.value = '';
     refreshPublishBtnState();
+    const panel = document.getElementById('cat-preflight-panel');
+    if (panel) panel.style.display = 'none';
   };
 
   window.useManualId = function(val) {

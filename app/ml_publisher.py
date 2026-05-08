@@ -350,12 +350,29 @@ def _shipping_block(price: Decimal) -> dict:
 
 
 def _sale_terms_block() -> list[dict]:
-    """Garantía default según política de Primi: 30 días de fábrica."""
+    """
+    Garantía default según política de Primi: 30 días de fábrica.
+
+    WARRANTY_TYPE es de lista cerrada — ML pide value_id, no value_name.
+    Los IDs son estables entre categorías:
+      - 2230279 = Garantía del fabricante
+      - 2230280 = Garantía del vendedor
+      - 2230281 = Sin garantía
+    WARRANTY_TIME es free-text con value_struct {number, unit}.
+    """
     return [
-        {"id": "WARRANTY_TYPE", "value_name": DEFAULT_WARRANTY_TYPE},
+        {
+            "id": "WARRANTY_TYPE",
+            "value_id": "2230279",
+            "value_name": DEFAULT_WARRANTY_TYPE,
+        },
         {
             "id": "WARRANTY_TIME",
             "value_name": f"{DEFAULT_WARRANTY_TIME_VALUE} {DEFAULT_WARRANTY_TIME_UNIT}",
+            "value_struct": {
+                "number": DEFAULT_WARRANTY_TIME_VALUE,
+                "unit": DEFAULT_WARRANTY_TIME_UNIT,
+            },
         },
     ]
 

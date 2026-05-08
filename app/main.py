@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.27.4"
+APP_VERSION = "0.28.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1245,6 +1245,118 @@ async def catalogo_ficha_save(
 # ===============================================================
 # Publicación de productos NUEVOS a Mercado Libre (POST /items)
 # ===============================================================
+
+@app.get("/api/ml/category-preflight")
+def api_ml_category_preflight(
+    sku: str,
+    category_id: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Pre-flight de atributos para una categoría ML elegida.
+
+    Recibe sku + category_id, devuelve qué atributos obligatorios tiene esa
+    categoría y cuáles están cubiertos por la ficha técnica del producto.
+
+    Respuesta:
+      {
+        "ready": bool,           # True si todos los required están cubiertos
+        "is_catalog": bool,      # True si la categoría usa catálogo de ML
+        "n_required": int,
+        "n_missing": int,
+        "attrs": [
+          {
+            "id": "BRAND",
+            "name": "Marca",
+            "value_type": "string",
+            "values": [{"id":..., "name":...}, ...],   # si es lista cerrada
+            "in_ficha": bool,
+            "ficha_value": "...",                       # valor actual si lo tiene
+            "ficha_key": "marca",                       # key de la ficha que matcheó
+            "required": True
+          },
+          ...
+        ]
+      }
+    """
+    prod = db.execute(
+        select_(catalogo.Producto).where(catalogo.Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return JSONResponse({"error": f"SKU '{sku}' no existe"}, status_code=404)
+
+    cat_attrs = ml_client.get_category_attributes(db, category_id) or []
+    is_cat = ml_publisher.is_catalog_category(db, category_id)
+
+    ficha = prod.ficha_tecnica or {}
+    ficha_norm = {
+        catalogo._norm_attr_key(k): (k, v)
+        for k, v in ficha.items()
+        if v is not None
+    }
+
+    out_attrs = []
+    n_required = 0
+    n_missing = 0
+    for attr in cat_attrs:
+        attr_id = attr.get("id") or ""
+        attr_name = attr.get("name") or ""
+        tags = attr.get("tags") or {}
+        is_required = bool(tags.get("required") is True)
+        if not is_required:
+            continue  # Solo nos interesan los obligatorios
+        n_required += 1
+
+        # Match: probamos por id_lowercase, id_normalizado, nombre_normalizado
+        found_key = None
+        found_val = None
+        for cand in (
+            attr_id.lower(),
+            catalogo._norm_attr_key(attr_id),
+            catalogo._norm_attr_key(attr_name),
+        ):
+            if not cand:
+                continue
+            if cand in ficha_norm:
+                orig_key, val = ficha_norm[cand]
+                str_val = str(val).strip()
+                if str_val:
+                    found_key = orig_key
+                    found_val = str_val
+                    break
+
+        if found_val is None:
+            n_missing += 1
+
+        # Tomamos los primeros 30 values si la lista es cerrada (para mostrar
+        # las opciones permitidas al usuario). Más de 30 sería inútil para UI.
+        values = []
+        for v in (attr.get("values") or [])[:30]:
+            values.append({
+                "id": v.get("id"),
+                "name": v.get("name", ""),
+            })
+
+        out_attrs.append({
+            "id": attr_id,
+            "name": attr_name,
+            "value_type": attr.get("value_type"),
+            "values": values,
+            "in_ficha": found_val is not None,
+            "ficha_value": found_val,
+            "ficha_key": found_key,
+            "required": True,
+        })
+
+    return JSONResponse({
+        "ready": n_missing == 0,
+        "is_catalog": is_cat,
+        "n_required": n_required,
+        "n_missing": n_missing,
+        "attrs": out_attrs,
+    })
+
 
 @app.get("/api/ml/category-search")
 def api_ml_category_search(
