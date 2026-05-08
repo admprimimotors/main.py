@@ -352,9 +352,19 @@
       {% endif %}
     </div>
   </div>
-  <a href="/catalogo/{{ producto.sku|urlencode }}/editar" class="btn btn-ghost">
-    ✎ Editar
-  </a>
+  <div style="display: flex; gap: 8px;">
+    <a href="/catalogo/{{ producto.sku|urlencode }}/editar" class="btn btn-ghost">
+      ✎ Editar
+    </a>
+    <form method="post" action="/catalogo/{{ producto.sku|urlencode }}/eliminar"
+          style="margin: 0;"
+          onsubmit="return confirm('¿Eliminar este producto del catálogo?\n\nSe borrará permanentemente, junto con sus fotos y compatibilidades.\n\n{% if producto.ml_item_id %}Atención: este producto está vinculado a la publicación ML {{ producto.ml_item_id }} — el delete local NO despublica en ML, eso lo hacés desde ML aparte.\n\n{% endif %}Esta acción no se puede deshacer.');">
+      <button type="submit" class="btn btn-ghost"
+              style="color: #fca5a5; border-color: rgba(239,68,68,.30);">
+        🗑 Eliminar
+      </button>
+    </form>
+  </div>
 </div>
 
 <div class="stats-row">

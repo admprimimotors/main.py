@@ -1458,6 +1458,73 @@ def keys_linkeadas_a_ml(producto: Producto) -> set[str]:
     return keys
 
 
+def eliminar_producto(db: Session, sku: str) -> tuple[bool, str]:
+    """
+    Borra HARD un producto del catálogo. Cascade automático a:
+      - fotos_producto (FK ondelete=CASCADE)
+      - producto_compatibilidades (FK ondelete=CASCADE)
+
+    Verificamos con db.expire_all() + re-query que el producto efectivamente
+    desapareció antes de devolver éxito (evita falsos positivos si hay un
+    constraint que aborta el delete silenciosamente).
+
+    NOTA: si el producto está vinculado a una publicación de ML, el delete
+    local NO despublica en ML — solo desvincula. La publicación ML sigue viva.
+    El caller puede surface ese hecho como warning.
+    """
+    prod = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return False, f"SKU '{sku}' no existe"
+
+    estaba_en_ml = bool(prod.ml_item_id)
+    titulo_snap = prod.titulo or ""
+
+    try:
+        db.delete(prod)
+        db.commit()
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False, f"Error eliminando: {type(e).__name__}: {e}"
+
+    # Verificación: re-query
+    db.expire_all()
+    still = db.execute(
+        select(Producto).where(Producto.sku == sku)
+    ).scalar_one_or_none()
+    if still is not None:
+        return False, "El producto sigue en la base después del delete (posible FK)"
+
+    msg = f"✓ Producto '{titulo_snap}' (SKU {sku}) eliminado"
+    if estaba_en_ml:
+        msg += " · Atención: la publicación en ML sigue activa, despublicala desde ML"
+    return True, msg
+
+
+def eliminar_productos_bulk(db: Session, skus: list[str]) -> tuple[int, int, list[str]]:
+    """
+    Borra HARD múltiples productos. Devuelve (n_ok, n_fail, errores).
+    Cada SKU se procesa en su propia transacción para que un fallo no
+    arrastre al resto.
+    """
+    n_ok = 0
+    errores: list[str] = []
+    for sku in skus:
+        sku = (sku or "").strip()
+        if not sku:
+            continue
+        ok, msg = eliminar_producto(db, sku)
+        if ok:
+            n_ok += 1
+        else:
+            errores.append(f"{sku}: {msg}")
+    return n_ok, len(errores), errores
+
+
 def update_producto_basic(
     db: Session,
     sku: str,

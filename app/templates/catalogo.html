@@ -514,6 +514,15 @@
             onclick="return confirm('Pushear los 50 más antiguos que matchean los filtros activos?');">
       ↑ Push 50 más antiguos
     </button>
+
+    <div class="divider"></div>
+
+    <button type="submit" formaction="/catalogo/bulk/eliminar"
+            id="btn-delete-sel" disabled
+            style="background: rgba(239,68,68,.10); border: 1px solid rgba(239,68,68,.40); color: #fca5a5;"
+            onclick="return confirmBulkDelete();">
+      🗑 Eliminar seleccionados
+    </button>
   </div>
 
   <div class="card" style="padding: 0; overflow-x: auto;">
@@ -641,6 +650,7 @@
   const counter = document.getElementById('sel-count');
   const btnPushSel = document.getElementById('btn-push-sel');
   const btnEditSel = document.getElementById('btn-edit-sel');
+  const btnDeleteSel = document.getElementById('btn-delete-sel');
 
   // Container para los hidden inputs de SKUs seleccionados que NO están visibles
   // en esta página (para que el form los envíe igual).
@@ -683,6 +693,7 @@
     counter.textContent = totalSelected;
     if (btnPushSel) btnPushSel.disabled = (totalSelected === 0);
     if (btnEditSel) btnEditSel.disabled = (totalSelected === 0);
+    if (btnDeleteSel) btnDeleteSel.disabled = (totalSelected === 0);
 
     // Sync el "select all visible" con el estado de la página actual
     const visibleSelectedCount = document.querySelectorAll('.row-check:checked').length;
@@ -759,6 +770,21 @@ function confirmBulkEdit() {
     `Aplicar "${labelMap[campo]}" = ${valorMostrar} a ${n} producto${n === 1 ? '' : 's'}?\n\n` +
     `Esta acción modifica el campo en TODOS los seleccionados, ` +
     `pisando los valores actuales.`
+  );
+}
+
+function confirmBulkDelete() {
+  // Conteo: visibles tildados + offpage hidden inputs
+  const visibles = document.querySelectorAll('.row-check:checked').length;
+  const offpage = document.querySelectorAll('#offpage-skus input[name=skus]').length;
+  const n = visibles + offpage;
+  if (n === 0) return false;
+  return confirm(
+    `¿Eliminar ${n} producto${n === 1 ? '' : 's'} del catálogo?\n\n` +
+    `Se borran permanentemente, junto con sus fotos y compatibilidades.\n` +
+    `Si alguno está vinculado a una publicación de ML, esa publicación NO se ` +
+    `despublica — eso lo hacés desde ML aparte.\n\n` +
+    `Esta acción NO se puede deshacer.`
   );
 }
 </script>

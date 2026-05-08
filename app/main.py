@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.29.0"
+APP_VERSION = "0.30.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -519,6 +519,101 @@ async def catalogo_ml_link_upload(
         }
 
     return RedirectResponse("/catalogo", status_code=303)
+
+
+# ---------------------------------------------------------------
+# Eliminar productos del catálogo (HARD delete — individual + bulk)
+# ---------------------------------------------------------------
+# IMPORTANTE: la ruta bulk va con 2 segmentos después de /catalogo/ para no
+# chocar con /catalogo/{sku}. Por eso es /catalogo/bulk/eliminar y NO
+# /catalogo/eliminar (que matchearía como sku="eliminar").
+
+@app.post("/catalogo/bulk/eliminar")
+async def catalogo_bulk_eliminar(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Elimina varios productos del catálogo en una sola operación.
+    Acepta el form de catalogo.html (name="skus") y también ?sku=... (singular)
+    para compatibilidad con otras vistas.
+    """
+    form = await request.form()
+    raw = list(form.getlist("skus")) + list(form.getlist("sku"))
+    skus = [s.strip() for s in raw if (s or "").strip()]
+    if not skus:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": "No seleccionaste ningún producto para eliminar.",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    try:
+        n_ok, n_fail, errores = catalogo.eliminar_productos_bulk(db, skus)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado en eliminación masiva: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    if n_ok and not n_fail:
+        flash_type = "success"
+        msg = f"✓ {n_ok} producto{'s' if n_ok != 1 else ''} eliminado{'s' if n_ok != 1 else ''}."
+    elif n_ok:
+        flash_type = "warning"
+        msg = (
+            f"{n_ok} eliminado{'s' if n_ok != 1 else ''}, {n_fail} fallaron. "
+            "Errores: " + " · ".join(errores[:3])
+        )
+        if n_fail > 3:
+            msg += f" (+{n_fail - 3} más)"
+    else:
+        flash_type = "error"
+        msg = f"Ningún producto eliminado. Errores: " + " · ".join(errores[:3])
+
+    request.session["flash"] = {"type": flash_type, "msg": msg}
+    return RedirectResponse("/catalogo", status_code=303)
+
+
+@app.post("/catalogo/{sku}/eliminar")
+def catalogo_eliminar(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Elimina un producto individual del catálogo (HARD delete)."""
+    try:
+        ok, msg = catalogo.eliminar_producto(db, sku)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+
+    request.session["flash"] = {
+        "type": "success" if ok else "error",
+        "msg": msg,
+    }
+    # Si lo eliminamos, no hay producto al que volver — redirigimos al listado.
+    if ok:
+        return RedirectResponse("/catalogo", status_code=303)
+    return RedirectResponse(f"/catalogo/{sku}", status_code=303)
 
 
 # ---------------------------------------------------------------
