@@ -245,9 +245,16 @@
 <div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>
 {% endif %}
 
-<div class="page-intro">
-  <h2>Catálogo</h2>
-  <p>{{ total }} producto{{ '' if total == 1 else 's' }} en la base. Subí el Excel master para sincronizar.</p>
+<div class="page-intro" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+  <div>
+    <h2>Catálogo</h2>
+    <p>{{ total }} producto{{ '' if total == 1 else 's' }} en la base. Subí el Excel master para sincronizar.</p>
+  </div>
+  {# Link al export — respeta los filtros activos así descargás solo lo que estás viendo #}
+  <a href="/catalogo/exportar/xlsx?q={{ search|urlencode }}&vinculadas={{ vinculadas|urlencode }}&categoria={{ categoria|urlencode }}&marca={{ marca|urlencode }}"
+     class="btn btn-ghost" title="Exportar la lista actual (con filtros aplicados) a Excel">
+    📥 Exportar Excel
+  </a>
 </div>
 
 <details class="collapsible-card">

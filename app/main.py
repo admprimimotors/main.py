@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.31.0"
+APP_VERSION = "0.32.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -519,6 +519,54 @@ async def catalogo_ml_link_upload(
         }
 
     return RedirectResponse("/catalogo", status_code=303)
+
+
+# ---------------------------------------------------------------
+# Exportar catálogo completo a Excel (con filtros actuales)
+# ---------------------------------------------------------------
+# Va con 2 segmentos después de /catalogo/ para no chocar con /catalogo/{sku}.
+
+@app.get("/catalogo/exportar/xlsx")
+def catalogo_exportar_xlsx(
+    request: Request,
+    q: str = "",
+    vinculadas: str = "",
+    categoria: str = "",
+    marca: str = "",
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Descarga un xlsx con TODOS los productos que matchean los filtros
+    (search + ML vinculadas + categoria + marca). Compatible con la
+    importación: podés exportar, editar en Excel, y volver a importar.
+    """
+    try:
+        xlsx_bytes = catalogo.exportar_catalogo_xlsx(
+            db,
+            search=q,
+            vinculadas=vinculadas,
+            categoria=categoria,
+            marca=marca,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error generando export: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/catalogo", status_code=303)
+
+    from datetime import datetime as _dt
+    fname = f"catalogo_primi_motors_{_dt.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        },
+    )
 
 
 # ---------------------------------------------------------------
@@ -1141,16 +1189,18 @@ def catalogo_editar_save(
         request.session["flash"] = {"type": "error", "msg": msg}
         return RedirectResponse(f"/catalogo/{sku}/editar", status_code=303)
 
-    # Auto-push a ML si está habilitado y hay cambios pusheables (precio o descripción).
+    # Auto-push a ML si está habilitado y hay cambios pusheables.
     push_price = "precio_final" in cambios
     push_description = "descripcion" in cambios
-    if (push_price or push_description) and ml_client.is_write_enabled():
+    push_title = "titulo" in cambios
+    if (push_price or push_description or push_title) and ml_client.is_write_enabled():
         try:
             push_ok, push_msg = catalogo.push_to_ml(
                 db, sku,
                 push_stock=False,
                 push_price=push_price,
                 push_description=push_description,
+                push_title=push_title,
             )
         except Exception as e:
             push_ok = False
@@ -1183,6 +1233,7 @@ def catalogo_ml_push(
             push_price=True,
             push_description=True,
             push_attributes=True,
+            push_title=True,
         )
     except Exception as e:
         import traceback

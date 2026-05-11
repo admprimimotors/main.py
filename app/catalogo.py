@@ -28,7 +28,7 @@ import pandas as pd
 import requests
 from sqlalchemy import func as sql_func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .models import FotoProducto, Producto, ProductoCompatibilidad, Vehiculo
 
@@ -1552,6 +1552,133 @@ def keys_linkeadas_a_ml(producto: Producto) -> set[str]:
     return keys
 
 
+def exportar_catalogo_xlsx(
+    db: Session,
+    *,
+    search: str = "",
+    vinculadas: str = "",
+    categoria: str = "",
+    marca: str = "",
+) -> bytes:
+    """
+    Genera un xlsx con todos los productos que matchean los filtros + sus
+    compatibilidades. 2 hojas:
+      - "Catalogo": una fila por producto, con flattening de ficha_tecnica
+        (cada key como columna) y `fotos` joined con `;`.
+      - "Compatibilidades": una fila por par producto-vehiculo.
+
+    El formato es compatible con la importación: si exportás, editás en Excel
+    y volvés a importar, los productos se upsertean correctamente.
+    """
+    import io
+
+    # Reusamos list_productos con un page_size grande para traer todo.
+    # Pero queremos TODOS los productos, no una página — hacemos query directo
+    # con los mismos filtros.
+    base_q = (
+        select(Producto)
+        .options(selectinload(Producto.fotos), selectinload(Producto.compatibilidades))
+    )
+    extra_conds = []
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        extra_conds.append(or_(
+            Producto.sku.ilike(like),
+            Producto.titulo.ilike(like),
+            Producto.marca.ilike(like),
+            Producto.categoria.ilike(like),
+        ))
+    if vinculadas == "si":
+        extra_conds.append(Producto.ml_item_id.is_not(None))
+    elif vinculadas == "no":
+        extra_conds.append(Producto.ml_item_id.is_(None))
+    if categoria:
+        extra_conds.append(Producto.categoria == categoria)
+    if marca:
+        extra_conds.append(Producto.marca == marca)
+    if extra_conds:
+        base_q = base_q.where(*extra_conds)
+    base_q = base_q.order_by(Producto.sku.asc())
+
+    productos = list(db.execute(base_q).scalars().all())
+
+    # ----- Hoja Catalogo -----
+    # Detectar TODAS las keys de ficha_tecnica que aparecen en algún producto
+    # (para armar el set de columnas dinámicas).
+    ficha_keys: list[str] = []
+    seen_keys = set()
+    for p in productos:
+        for k in (p.ficha_tecnica or {}).keys():
+            if k not in seen_keys:
+                seen_keys.add(k)
+                ficha_keys.append(k)
+    ficha_keys.sort()
+
+    catalogo_rows = []
+    for p in productos:
+        row = {
+            "SKU": p.sku,
+            "Titulo": p.titulo or "",
+            "Descripcion": p.descripcion or "",
+            "Categoria": p.categoria or "",
+            "Marca": p.marca or "",
+            "Precio_Costo": float(p.precio_costo) if p.precio_costo is not None else None,
+            "Precio_Final": float(p.precio_final) if p.precio_final is not None else None,
+            "Moneda": p.moneda or "ARS",
+            "Stock_Actual": p.stock_actual,
+            "Activo": "si" if p.activo else "no",
+            "ML_Item_ID": p.ml_item_id or "",
+            "ML_Variation_ID": p.ml_variation_id or "",
+            "ML_Permalink": p.ml_permalink or "",
+            "ML_Status": p.ml_status or "",
+            "ML_Stock": p.ml_stock,
+            "ML_Precio": float(p.ml_precio) if p.ml_precio is not None else None,
+            "ML_Envio_Fijo": float(p.ml_envio_fijo) if p.ml_envio_fijo is not None else None,
+            "ML_Impuestos_Pct": float(p.ml_impuestos_pct) if p.ml_impuestos_pct is not None else None,
+            "Fotos": "; ".join(f.url for f in (p.fotos or []) if f.url),
+            "Compat_Count": len(p.compatibilidades or []),
+        }
+        # Agregar las keys de ficha_tecnica como columnas
+        ficha = p.ficha_tecnica or {}
+        for k in ficha_keys:
+            row[k] = ficha.get(k)
+        catalogo_rows.append(row)
+
+    df_catalogo = pd.DataFrame(catalogo_rows)
+
+    # ----- Hoja Compatibilidades -----
+    compat_rows = []
+    for p in productos:
+        for pc in (p.compatibilidades or []):
+            v = pc.vehiculo
+            if v is None:
+                continue
+            compat_rows.append({
+                "SKU": p.sku,
+                "Marca_Vehiculo": v.marca,
+                "Modelo": v.modelo,
+                "Combustible": v.combustible or "",
+                "Cilindros": v.cilindros,
+                "Valvulas": v.valvulas,
+                "Cilindrada_cc": v.cilindrada_cc,
+                "Anio_Desde": v.anio_desde,
+                "Anio_Hasta": v.anio_hasta,
+                "Notas": pc.notas or "",
+            })
+    df_compat = pd.DataFrame(compat_rows) if compat_rows else pd.DataFrame(columns=[
+        "SKU", "Marca_Vehiculo", "Modelo", "Combustible", "Cilindros",
+        "Valvulas", "Cilindrada_cc", "Anio_Desde", "Anio_Hasta", "Notas",
+    ])
+
+    # Escribir el xlsx en memoria
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df_catalogo.to_excel(writer, sheet_name="Catalogo", index=False)
+        df_compat.to_excel(writer, sheet_name="Compatibilidades", index=False)
+
+    return buf.getvalue()
+
+
 def eliminar_producto(db: Session, sku: str) -> tuple[bool, str]:
     """
     Borra HARD un producto del catálogo. Cascade automático a:
@@ -1739,15 +1866,19 @@ def push_to_ml(
     push_price: bool = True,
     push_description: bool = False,
     push_attributes: bool = False,
+    push_title: bool = False,
     auto_activate: bool = True,
 ) -> tuple[bool, str]:
     """
-    Empuja stock / precio / descripción / atributos del DB local a la
+    Empuja stock / precio / descripción / atributos / título del DB local a la
     publicación de ML. Solo si write sync está habilitado.
 
     Para `push_attributes`: solo se mandan atributos cuyo valor en
     `ficha_tecnica` difiere del value_name original que ML reportó.
     Atributos nuevos (sin ID de ML) no se pushean — los ignora.
+
+    Para `push_title`: si la publicación está en una categoría con catálogo,
+    ML rechaza el PUT — capturamos y reportamos como warning, no error.
 
     Si `auto_activate=True` y el push de stock dejó al producto con
     stock_actual > 0 mientras estaba en estado `paused` o `inactive` en ML,
@@ -1791,6 +1922,8 @@ def push_to_ml(
         actions.append("descripcion")
     if push_attributes and attr_changes:
         actions.append("atributos")
+    if push_title and (prod.titulo or "").strip():
+        actions.append("titulo")
 
     if not actions:
         return False, "Nada para pushear (sin cambios o flags desactivados)"
@@ -1843,6 +1976,21 @@ def push_to_ml(
                 msgs.append(f"descripción ({fuente})")
             except ml_client.MLClientError as e:
                 errors.append(f"descripción falló: {e}")
+
+    if "titulo" in actions:
+        try:
+            ml_client.update_item_title(db, prod.ml_item_id, prod.titulo)
+            msgs.append("título")
+        except ml_client.MLClientError as e:
+            # En categorías catálogo ML rechaza el PUT de título. Lo
+            # reportamos como warning, no error, para no marcar falla todo el push.
+            err_str = str(e)
+            if "title" in err_str.lower() or "catalog" in err_str.lower():
+                errors.append(
+                    "título no actualizado (ML lo genera del catálogo en esta categoría)"
+                )
+            else:
+                errors.append(f"título falló: {e}")
 
     if "atributos" in actions:
         try:

@@ -398,6 +398,18 @@ def update_item_status(db: Session, item_id: str, status: str) -> dict:
     return _put(db, f"/items/{item_id}", {"status": status})
 
 
+def update_item_title(db: Session, item_id: str, title: str) -> dict:
+    """
+    PUT /items/{id} con title nuevo.
+
+    Atención: para publicaciones en categorías con catálogo (ej: Camisas de
+    Motor), ML rechaza este PUT — el título lo deriva del catálogo y no es
+    editable. El caller debería detectar la categoría antes y skipear si es
+    catálogo (o capturar el MLClientError y reportarlo como warning).
+    """
+    return _put(db, f"/items/{item_id}", {"title": (title or "").strip()[:60]})
+
+
 # =============================================================
 # Compatibilidades (vehículos compatibles)
 # =============================================================
