@@ -319,9 +319,10 @@ def _format_attr_for_ml(attr_def: dict, raw_value: str) -> Optional[dict]:
 
     if value_type == "number_unit":
         # Parsear "1", "1u", "1 u", "10cm", "1.5 kg", "75 mm", etc.
-        m = re.match(r"^\s*(-?\d+(?:[.,]\d+)?)\s*([a-zA-Z]*)\s*$", val_str)
+        # Las unidades pueden incluir comillas (") para pulgadas, así que permitimos
+        # caracteres no-alfanuméricos también
+        m = re.match(r"^\s*(-?\d+(?:[.,]\d+)?)\s*([a-zA-Z\"']*)\s*$", val_str)
         if not m:
-            # No parseamos como número — fallback: mandamos como value_name plano
             return {"id": attr_id, "value_name": val_str}
         num_str = m.group(1).replace(",", ".")
         try:
@@ -329,15 +330,20 @@ def _format_attr_for_ml(attr_def: dict, raw_value: str) -> Optional[dict]:
         except ValueError:
             return {"id": attr_id, "value_name": val_str}
         unit = (m.group(2) or "").strip()
+        allowed = attr_def.get("allowed_units") or []
+        allowed_ids = [u.get("id") for u in allowed if u.get("id")]
         if not unit:
-            # Si no especificó unidad en el valor, intentamos:
-            #   1. Buscar la unidad en ficha (ej "unidad_de_largo" o "unidad")
-            #   2. Usar la primera permitida por ML
-            allowed = attr_def.get("allowed_units") or []
-            if allowed:
-                unit = allowed[0].get("id") or ""
+            # Sin unidad en el valor: preferimos "mm" si está permitido (estándar
+            # para autopartes); si no, usamos la primera permitida.
+            # NUNCA pulgadas (") por default — ML a veces las pone primero pero
+            # los productos de autopartes argentinos casi siempre van en mm.
+            if "mm" in allowed_ids:
+                unit = "mm"
+            elif allowed_ids:
+                # Tomar la primera unidad metric (no pulgadas)
+                non_inch = [u for u in allowed_ids if u not in ('"', "''", "in")]
+                unit = non_inch[0] if non_inch else allowed_ids[0]
         if not unit:
-            # Sin unidad: fallback a value_name con solo el número (ML decide)
             n_show = int(num) if num.is_integer() else num
             return {"id": attr_id, "value_name": str(n_show)}
         # ML acepta números enteros como int o float; usamos int si es entero
@@ -364,6 +370,48 @@ def _format_attr_for_ml(attr_def: dict, raw_value: str) -> Optional[dict]:
     return {"id": attr_id, "value_name": val_str}
 
 
+def _find_paired_unit(ficha: dict, attr_name: str, attr_id: str) -> Optional[str]:
+    """
+    Para atributos number_unit, busca una key en la ficha que parezca contener
+    LA UNIDAD del atributo (paralela al valor).
+
+    Ej: si el atributo ML es "Diámetro interior" y la ficha tiene
+        "diametro_interior" + "unidad_de_diametro_interior", esta función
+        encuentra la key de la unidad y devuelve su valor ("mm").
+
+    Patrones probados (en este orden):
+      - unidad_de_<attr>
+      - unidad_<attr>
+      - <attr>_unidad
+      - <attr>_unit
+      - unit_<attr>
+    """
+    if not ficha:
+        return None
+    from .catalogo import _norm_attr_key
+    candidates_norm = []
+    for source in (attr_name, attr_id):
+        n = _norm_attr_key(source or "")
+        if not n:
+            continue
+        candidates_norm.append(n)
+    if not candidates_norm:
+        return None
+    ficha_keys_norm = {_norm_attr_key(k): k for k in ficha.keys()}
+    for attr_norm in candidates_norm:
+        for pattern in (
+            f"unidad_de_{attr_norm}",
+            f"unidad_{attr_norm}",
+            f"{attr_norm}_unidad",
+            f"{attr_norm}_unit",
+            f"unit_{attr_norm}",
+        ):
+            orig_key = ficha_keys_norm.get(pattern)
+            if orig_key and ficha.get(orig_key):
+                return str(ficha[orig_key]).strip()
+    return None
+
+
 def _ficha_to_ml_attributes(
     producto: Producto,
     category_attrs: list[dict],
@@ -374,14 +422,18 @@ def _ficha_to_ml_attributes(
 
     Para cada atributo definido por la categoría ML:
       1. Busca el valor con `get_producto_attr_value` (campos dedicados → ficha)
-      2. Lo formatea según value_type vía `_format_attr_for_ml`
-      3. Si formatear falla (ej texto en atributo numérico), se skipea
+      2. Si el atributo es number_unit y la ficha tiene una key paralela con la
+         unidad (ej `unidad_de_diametro_interior`), la concatena al valor para
+         que el formatter pueda parsearla.
+      3. Lo formatea según value_type vía `_format_attr_for_ml`
+      4. Si formatear falla (ej texto en atributo numérico), se skipea
 
     Esto evita que un atributo opcional con valor mal formateado tire abajo
     todo el POST.
     """
     if not category_attrs:
         return []
+    ficha = producto.ficha_tecnica or {}
     out: list[dict] = []
     for attr in category_attrs:
         attr_id = attr.get("id") or ""
@@ -390,6 +442,18 @@ def _ficha_to_ml_attributes(
         value = get_producto_attr_value(producto, attr_id, attr.get("name") or "")
         if not value:
             continue
+        # Para number_unit, si la ficha tiene la unidad en una key paralela,
+        # la concatenamos al valor antes de formatear. Solo si el valor no
+        # incluye ya una unidad (ej "91.49" sí pero "91.49 mm" no).
+        if attr.get("value_type") == "number_unit":
+            import re
+            has_unit_in_value = bool(re.search(r"[a-zA-Z\"']", str(value)))
+            if not has_unit_in_value:
+                paired_unit = _find_paired_unit(
+                    ficha, attr.get("name") or "", attr_id
+                )
+                if paired_unit:
+                    value = f"{value} {paired_unit}"
         formatted = _format_attr_for_ml(attr, value)
         if formatted:
             out.append(formatted)
