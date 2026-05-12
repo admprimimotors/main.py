@@ -2085,14 +2085,33 @@ def push_to_ml(
         try:
             ml_client.update_item_attributes(db, prod.ml_item_id, attr_changes)
             msgs.append(f"{len(attr_changes)} atributos")
-            # Refrescamos los raw_attributes con los nuevos values (parche optimista)
+            # Refrescamos los raw_attributes con los nuevos values (parche optimista).
+            # Soportamos los 3 shapes: value_name, value_id, value_struct.
             updated_raw = list(prod.ml_raw_attributes or [])
-            changes_by_id = {c["id"]: c["value_name"] for c in attr_changes}
+            existing_ids = {r.get("id") for r in updated_raw}
+            changes_by_id = {c["id"]: c for c in attr_changes if c.get("id")}
             for r in updated_raw:
-                if r.get("id") in changes_by_id:
-                    r["value_name"] = changes_by_id[r["id"]]
-                    r.pop("value_struct", None)  # ML resolverá
-                    r.pop("value_id", None)
+                ch = changes_by_id.get(r.get("id"))
+                if not ch:
+                    continue
+                # Limpiar campos previos y aplicar el shape nuevo
+                r.pop("value_name", None)
+                r.pop("value_id", None)
+                r.pop("value_struct", None)
+                if "value_id" in ch:
+                    r["value_id"] = ch["value_id"]
+                if "value_name" in ch:
+                    r["value_name"] = ch["value_name"]
+                if "value_struct" in ch:
+                    r["value_struct"] = ch["value_struct"]
+            # Agregar atributos nuevos que no estaban en raw
+            for cid, ch in changes_by_id.items():
+                if cid not in existing_ids:
+                    new_raw = {"id": cid}
+                    if "value_id" in ch: new_raw["value_id"] = ch["value_id"]
+                    if "value_name" in ch: new_raw["value_name"] = ch["value_name"]
+                    if "value_struct" in ch: new_raw["value_struct"] = ch["value_struct"]
+                    updated_raw.append(new_raw)
             prod.ml_raw_attributes = updated_raw
         except ml_client.MLClientError as e:
             errors.append(f"atributos fallaron: {e}")
