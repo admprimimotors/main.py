@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.33.2"
+APP_VERSION = "0.34.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1238,6 +1238,7 @@ def catalogo_ml_push(
             push_description=True,
             push_attributes=True,
             push_title=True,
+            push_pictures=True,
         )
     except Exception as e:
         import traceback

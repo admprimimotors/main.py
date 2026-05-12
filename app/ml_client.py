@@ -398,6 +398,16 @@ def update_item_status(db: Session, item_id: str, status: str) -> dict:
     return _put(db, f"/items/{item_id}", {"status": status})
 
 
+def update_item_pictures(db: Session, item_id: str, picture_urls: list[str]) -> dict:
+    """
+    PUT /items/{id} con un array `pictures` nuevo. Cada URL se manda como
+    {"source": url} y ML las descarga / vuelve a hostear. Reemplaza el set
+    completo de fotos de la publicación.
+    """
+    pictures = [{"source": u} for u in picture_urls if u]
+    return _put(db, f"/items/{item_id}", {"pictures": pictures})
+
+
 def update_item_title(db: Session, item_id: str, title: str) -> dict:
     """
     PUT /items/{id} con title nuevo.

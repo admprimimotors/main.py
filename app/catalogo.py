@@ -181,6 +181,12 @@ def _to_native(v: Any) -> Any:
             return v.isoformat()
         except Exception:
             return str(v)
+    # Floats sin parte decimal → int. Pandas lee columnas numéricas como
+    # float64 por default, así que un "4" en Excel llega como 4.0 acá. Para
+    # que la ficha técnica muestre "4" en vez de "4.0", lo convertimos.
+    if isinstance(v, float):
+        if v.is_integer():
+            return int(v)
     return v
 
 
@@ -1878,6 +1884,7 @@ def push_to_ml(
     push_description: bool = False,
     push_attributes: bool = False,
     push_title: bool = False,
+    push_pictures: bool = False,
     auto_activate: bool = True,
 ) -> tuple[bool, str]:
     """
@@ -1913,12 +1920,61 @@ def push_to_ml(
     if not prod.ml_item_id:
         return False, "Producto no vinculado a ML (sin ml_item_id)"
 
-    # Calcular cambios de atributos antes (para saber si hay que pushear)
+    # Calcular cambios de atributos antes (para saber si hay que pushear).
+    # Estrategia:
+    #   1. Pedimos la lista completa de atributos de la categoría ML.
+    #   2. Construimos el conjunto "qué atributos podemos pushear" usando
+    #      _ficha_to_ml_attributes (mira ficha + campos del producto, ej marca).
+    #   3. Comparamos contra ml_raw_attributes (snapshot original): diff = lo
+    #      que cambia o lo que falta enviar.
+    # Esto permite pushear atributos que NO estaban en el POST inicial pero
+    # ahora sí tienen valor en la ficha (caso típico: largo/diámetros que se
+    # cargaron después de publicar).
     attr_changes: list[dict] = []
     if push_attributes:
-        attr_changes = _diff_attributes_for_push(
-            prod.ml_raw_attributes or [], prod.ficha_tecnica or {}
-        )
+        from . import ml_publisher
+        # Necesitamos saber qué categoría ML usa este producto. Lo más confiable:
+        # si tenemos snapshot raw_attributes vacío, hay que consultar a ML
+        # (cara pero la única vía); si hay raw, lo dejamos como antes.
+        cat_id = (prod.ml_category_id or "").strip()
+        if not cat_id:
+            # Tomar el category_id real de la publicación ML
+            try:
+                ml_item = ml_client.get_item(db, prod.ml_item_id)
+                cat_id = ml_item.get("category_id") or ""
+            except Exception:
+                cat_id = ""
+        if cat_id:
+            cat_attrs = ml_client.get_category_attributes(db, cat_id) or []
+            full_payload_attrs = ml_publisher._ficha_to_ml_attributes(prod, cat_attrs)
+            # Indexar raw por id para diff rápido
+            raw_by_id = {
+                (r.get("id") or ""): r for r in (prod.ml_raw_attributes or [])
+            }
+            for a in full_payload_attrs:
+                aid = a.get("id")
+                if not aid:
+                    continue
+                raw = raw_by_id.get(aid)
+                if raw is None:
+                    # No estaba en raw → atributo nuevo, mandar
+                    attr_changes.append(a)
+                    continue
+                # Comparar valor: si value_id presente, usar value_id; si no, value_name
+                old_id = (raw.get("value_id") or None)
+                old_name = (_attr_value_str(raw) or "").strip()
+                new_id = a.get("value_id")
+                new_name = (a.get("value_name") or "").strip()
+                if new_id and old_id and new_id == old_id:
+                    continue
+                if not new_id and not old_id and new_name == old_name:
+                    continue
+                attr_changes.append(a)
+        else:
+            # Fallback: diff vs raw_attributes como antes (no podemos sumar new attrs)
+            attr_changes = _diff_attributes_for_push(
+                prod.ml_raw_attributes or [], prod.ficha_tecnica or {}
+            )
 
     # Decidir qué pushear según los flags y los datos disponibles
     actions = []
@@ -1935,6 +1991,8 @@ def push_to_ml(
         actions.append("atributos")
     if push_title and (prod.titulo or "").strip():
         actions.append("titulo")
+    if push_pictures and (prod.fotos or []):
+        actions.append("fotos")
 
     if not actions:
         return False, "Nada para pushear (sin cambios o flags desactivados)"
@@ -1987,6 +2045,14 @@ def push_to_ml(
                 msgs.append(f"descripción ({fuente})")
             except ml_client.MLClientError as e:
                 errors.append(f"descripción falló: {e}")
+
+    if "fotos" in actions:
+        urls = [f.url for f in (prod.fotos or []) if f.url]
+        try:
+            ml_client.update_item_pictures(db, prod.ml_item_id, urls)
+            msgs.append(f"{len(urls)} foto{'s' if len(urls) != 1 else ''}")
+        except ml_client.MLClientError as e:
+            errors.append(f"fotos fallaron: {e}")
 
     if "titulo" in actions:
         try:
