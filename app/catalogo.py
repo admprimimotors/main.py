@@ -2047,10 +2047,22 @@ def push_to_ml(
                 errors.append(f"descripción falló: {e}")
 
     if "fotos" in actions:
-        urls = [f.url for f in (prod.fotos or []) if f.url]
+        # Lazy import para evitar circular
+        from . import ml_publisher
+        urls = [
+            ml_publisher._normalize_picture_url(f.url)
+            for f in (prod.fotos or []) if f.url
+        ]
         try:
-            ml_client.update_item_pictures(db, prod.ml_item_id, urls)
-            msgs.append(f"{len(urls)} foto{'s' if len(urls) != 1 else ''}")
+            ml_resp = ml_client.update_item_pictures(db, prod.ml_item_id, urls)
+            n_aceptadas = len((ml_resp or {}).get("pictures") or [])
+            if n_aceptadas == len(urls):
+                msgs.append(f"{len(urls)} foto{'s' if len(urls) != 1 else ''}")
+            else:
+                msgs.append(
+                    f"{n_aceptadas}/{len(urls)} fotos (ML descartó "
+                    f"{len(urls) - n_aceptadas})"
+                )
         except ml_client.MLClientError as e:
             errors.append(f"fotos fallaron: {e}")
 

@@ -321,21 +321,25 @@ def _format_attr_for_ml(attr_def: dict, raw_value: str) -> Optional[dict]:
         # Parsear "1", "1u", "1 u", "10cm", "1.5 kg", "75 mm", etc.
         m = re.match(r"^\s*(-?\d+(?:[.,]\d+)?)\s*([a-zA-Z]*)\s*$", val_str)
         if not m:
-            return None
+            # No parseamos como número — fallback: mandamos como value_name plano
+            return {"id": attr_id, "value_name": val_str}
         num_str = m.group(1).replace(",", ".")
         try:
             num = float(num_str)
         except ValueError:
-            return None
+            return {"id": attr_id, "value_name": val_str}
         unit = (m.group(2) or "").strip()
         if not unit:
-            # Si no especificó unidad, usar la primera permitida por ML
+            # Si no especificó unidad en el valor, intentamos:
+            #   1. Buscar la unidad en ficha (ej "unidad_de_largo" o "unidad")
+            #   2. Usar la primera permitida por ML
             allowed = attr_def.get("allowed_units") or []
             if allowed:
                 unit = allowed[0].get("id") or ""
         if not unit:
-            # No se puede mandar number_unit sin unit — skipear
-            return None
+            # Sin unidad: fallback a value_name con solo el número (ML decide)
+            n_show = int(num) if num.is_integer() else num
+            return {"id": attr_id, "value_name": str(n_show)}
         # ML acepta números enteros como int o float; usamos int si es entero
         n_value = int(num) if num.is_integer() else num
         return {
@@ -415,10 +419,45 @@ def _derive_family_name(producto: Producto) -> str:
     return cleaned[:60]
 
 
+def _normalize_picture_url(url: str) -> str:
+    """
+    Normaliza URLs comunes que ML no logra descargar directamente:
+      - Google Drive viewer (`/file/d/ID/view`) → URL directa (`uc?export=view&id=ID`)
+      - Google Drive open (`?id=ID`) → URL directa
+      - Dropbox preview (`?dl=0`) → forzar descarga (`?dl=1`)
+
+    Si no matchea ninguno de los patterns, devuelve la URL tal cual.
+    """
+    import re
+    if not url:
+        return url
+    u = url.strip()
+
+    # Google Drive — file/d/ID/view
+    m = re.search(r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)", u)
+    if m:
+        return f"https://drive.google.com/uc?export=view&id={m.group(1)}"
+
+    # Google Drive — open?id=ID
+    m = re.search(r"drive\.google\.com/open\?id=([a-zA-Z0-9_-]+)", u)
+    if m:
+        return f"https://drive.google.com/uc?export=view&id={m.group(1)}"
+
+    # Dropbox — forzar descarga
+    if "dropbox.com" in u and "dl=0" in u:
+        return u.replace("dl=0", "dl=1")
+
+    return u
+
+
 def _photo_urls(producto: Producto) -> list[dict]:
-    """Lista de URLs de fotos en el formato que espera ML: [{"source": url}, ...]."""
+    """Lista de URLs de fotos en el formato que espera ML: [{"source": url}, ...].
+
+    Normaliza URLs comunes problemáticas (Drive viewer → directo, etc.)
+    para mejorar el match-rate de descarga por parte de ML.
+    """
     return [
-        {"source": f.url}
+        {"source": _normalize_picture_url(f.url)}
         for f in (producto.fotos or [])
         if f.url
     ]
@@ -744,6 +783,28 @@ def create_publication(
     if not new_id:
         return False, f"ML respondió sin id de item: {resp}", None
 
+    # ---- DIAGNÓSTICO: comparar lo que mandamos vs lo que ML aceptó ----
+    sent_attr_ids = {a.get("id") for a in (payload.get("attributes") or []) if a.get("id")}
+    received_attr_ids = {
+        a.get("id") for a in (resp.get("attributes") or [])
+        if a.get("id") and (a.get("value_name") or a.get("value_id") or a.get("value_struct"))
+    }
+    attrs_droppeados = sent_attr_ids - received_attr_ids
+
+    sent_pics = len(payload.get("pictures") or [])
+    received_pics = len(resp.get("pictures") or [])
+    pics_droppeadas = sent_pics - received_pics
+
+    diag_parts = []
+    if attrs_droppeados:
+        diag_parts.append(
+            f"⚠ Atributos descartados por ML: {', '.join(sorted(attrs_droppeados))}"
+        )
+    if pics_droppeadas > 0:
+        diag_parts.append(
+            f"⚠ ML descartó {pics_droppeadas} de {sent_pics} foto(s) (URL no descargable)"
+        )
+
     # Persistimos los identificadores en el producto local
     prod.ml_item_id = new_id
     prod.ml_permalink = resp.get("permalink")
@@ -791,6 +852,8 @@ def create_publication(
     msg = f"✓ Publicado en ML como {new_id} (status={resp.get('status')})"
     if resp.get("permalink"):
         msg += f" · {resp['permalink']}"
+    if diag_parts:
+        msg += " · " + " · ".join(diag_parts)
     if desc_warning:
         msg += desc_warning
     return True, msg, new_id
@@ -846,7 +909,7 @@ def build_matrix_payload(
         for f in (v.fotos or []):
             if f.url and f.url not in seen_urls:
                 seen_urls.add(f.url)
-                item_pictures.append({"source": f.url})
+                item_pictures.append({"source": _normalize_picture_url(f.url)})
 
     variations_block: list[dict] = []
     for v in variants:
@@ -859,7 +922,7 @@ def build_matrix_payload(
         if value_name:
             combo["value_name"] = value_name
 
-        var_pictures = [{"source": f.url} for f in (v.fotos or []) if f.url]
+        var_pictures = [{"source": _normalize_picture_url(f.url)} for f in (v.fotos or []) if f.url]
 
         variations_block.append({
             "attribute_combinations": [combo],
