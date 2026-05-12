@@ -2083,8 +2083,24 @@ def push_to_ml(
 
     if "atributos" in actions:
         try:
-            ml_client.update_item_attributes(db, prod.ml_item_id, attr_changes)
-            msgs.append(f"{len(attr_changes)} atributos")
+            resp_item = ml_client.update_item_attributes(db, prod.ml_item_id, attr_changes)
+            # Diff: comparar qué atributos ML aceptó con valor vs lo que mandamos
+            attrs_after = (resp_item or {}).get("attributes") or []
+            attrs_with_value_after = {
+                a.get("id") for a in attrs_after
+                if a.get("id") and (
+                    a.get("value_name") or a.get("value_id") or a.get("value_struct")
+                )
+            }
+            sent_ids = {a.get("id") for a in attr_changes if a.get("id")}
+            dropped = sent_ids - attrs_with_value_after
+            if dropped:
+                msgs.append(
+                    f"{len(sent_ids) - len(dropped)}/{len(sent_ids)} atributos · "
+                    f"⚠ descartados: {', '.join(sorted(dropped))[:120]}"
+                )
+            else:
+                msgs.append(f"{len(attr_changes)} atributos")
             # Refrescamos los raw_attributes con los nuevos values (parche optimista).
             # Soportamos los 3 shapes: value_name, value_id, value_struct.
             updated_raw = list(prod.ml_raw_attributes or [])

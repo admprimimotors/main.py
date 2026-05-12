@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.34.2"
+APP_VERSION = "0.34.3"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1396,6 +1396,54 @@ async def catalogo_ficha_save(
 # ===============================================================
 # Publicación de productos NUEVOS a Mercado Libre (POST /items)
 # ===============================================================
+
+@app.get("/api/ml/category-attributes")
+def api_ml_category_attributes(
+    request: Request,
+    category_id: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Debug: lista TODOS los atributos que ML define para una categoría —
+    útil para entender por qué un atributo de la ficha no se publica
+    (no existe en la categoría, espera otro nombre/tipo, etc.).
+
+    Uso: /api/ml/category-attributes?category_id=MLA429225
+    """
+    cat_id = (category_id or "").strip()
+    if not cat_id:
+        return JSONResponse({"error": "Falta category_id"}, status_code=400)
+
+    attrs = ml_client.get_category_attributes(db, cat_id) or []
+    out = []
+    for a in attrs:
+        tags = a.get("tags") or {}
+        out.append({
+            "id": a.get("id"),
+            "name": a.get("name"),
+            "value_type": a.get("value_type"),
+            "tags": {
+                "required": tags.get("required") is True,
+                "allow_variations": tags.get("allow_variations") is True,
+                "hidden": tags.get("hidden") is True,
+            },
+            "allowed_units": [
+                {"id": u.get("id"), "name": u.get("name")}
+                for u in (a.get("allowed_units") or [])
+            ],
+            "values": [
+                {"id": v.get("id"), "name": v.get("name")}
+                for v in (a.get("values") or [])[:20]
+            ],
+            "values_count": len(a.get("values") or []),
+        })
+    return JSONResponse({
+        "category_id": cat_id,
+        "attributes_count": len(out),
+        "attributes": out,
+    })
+
 
 @app.get("/api/ml/category-preflight")
 def api_ml_category_preflight(
