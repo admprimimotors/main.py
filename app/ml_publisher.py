@@ -629,10 +629,17 @@ def create_publication(
         err_str = str(e).lower()
         # Si fallamos por catalog_listing=false en una categoría catálogo-mandatory,
         # reintentamos sin opt-out (la publicación pierde título editable pero
-        # se publica). Detectamos por palabras clave en el mensaje de error.
+        # se publica). ML a veces dice "catalog_listing" explícito, otras dice
+        # "fields [title] are invalid" — ambas significan lo mismo: hay que
+        # sacar title y catalog_listing del payload.
         catalog_fail_signals = (
             "catalog_listing", "catalog listing", "mandatory catalog",
-            "must be catalog", "catalog_product"
+            "must be catalog", "catalog_product",
+            # ML reporta así cuando la categoría obliga catálogo y le mandaste title:
+            "[title] are invalid",
+            "title] are invalid",
+            "fields [title]",
+            "body.invalid_fields",
         )
         if (
             payload.get("catalog_listing") is False
@@ -645,7 +652,10 @@ def create_publication(
             try:
                 resp = ml_client.create_item(db, retry_payload)
             except ml_client.MLClientError as e2:
-                return False, f"ML rechazó la publicación (con/sin opt-out): {e2}", None
+                return False, (
+                    f"ML rechazó la publicación con catalog_listing=false ({e}), "
+                    f"reintenté sin él y también falló: {e2}"
+                ), None
         else:
             return False, f"ML rechazó la publicación: {e}", None
     except Exception as e:
@@ -925,7 +935,11 @@ def create_matrix_publication(
         err_str = str(e).lower()
         catalog_fail_signals = (
             "catalog_listing", "catalog listing", "mandatory catalog",
-            "must be catalog", "catalog_product"
+            "must be catalog", "catalog_product",
+            "[title] are invalid",
+            "title] are invalid",
+            "fields [title]",
+            "body.invalid_fields",
         )
         if (
             payload.get("catalog_listing") is False
@@ -937,7 +951,10 @@ def create_matrix_publication(
             try:
                 resp = ml_client.create_item(db, retry_payload)
             except ml_client.MLClientError as e2:
-                return False, f"ML rechazó la publicación matriz (con/sin opt-out): {e2}", None, 0
+                return False, (
+                    f"ML rechazó la matriz con catalog_listing=false ({e}), "
+                    f"reintenté sin él y también falló: {e2}"
+                ), None, 0
         else:
             return False, f"ML rechazó la publicación matriz: {e}", None, 0
     except Exception as e:
