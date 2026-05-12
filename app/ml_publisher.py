@@ -288,6 +288,78 @@ def get_producto_attr_value(producto: Producto, attr_id: str, attr_name: str) ->
     return None
 
 
+def _format_attr_for_ml(attr_def: dict, raw_value: str) -> Optional[dict]:
+    """
+    Formatea el valor de un atributo según su value_type ML.
+
+    ML acepta distintos shapes según el tipo:
+      - number: value_name con solo dígitos/decimales
+      - number_unit: value_struct {number, unit} (parseamos "1 u", "10cm", etc.)
+      - list (closed list): value_id si matcheamos contra `values`, si no value_name
+      - string / boolean / otros: value_name plano
+
+    Si el valor no se puede parsear de manera válida para el tipo (ej:
+    "Embalaje individual" en un atributo number), devuelve None — se skipea
+    el atributo para no romper todo el POST.
+    """
+    import re
+    val_str = str(raw_value or "").strip()
+    if not val_str:
+        return None
+    attr_id = attr_def.get("id")
+    if not attr_id:
+        return None
+    value_type = (attr_def.get("value_type") or "string").lower()
+
+    if value_type == "number":
+        m = re.search(r"-?\d+(?:[.,]\d+)?", val_str)
+        if not m:
+            return None
+        return {"id": attr_id, "value_name": m.group(0).replace(",", ".")}
+
+    if value_type == "number_unit":
+        # Parsear "1", "1u", "1 u", "10cm", "1.5 kg", "75 mm", etc.
+        m = re.match(r"^\s*(-?\d+(?:[.,]\d+)?)\s*([a-zA-Z]*)\s*$", val_str)
+        if not m:
+            return None
+        num_str = m.group(1).replace(",", ".")
+        try:
+            num = float(num_str)
+        except ValueError:
+            return None
+        unit = (m.group(2) or "").strip()
+        if not unit:
+            # Si no especificó unidad, usar la primera permitida por ML
+            allowed = attr_def.get("allowed_units") or []
+            if allowed:
+                unit = allowed[0].get("id") or ""
+        if not unit:
+            # No se puede mandar number_unit sin unit — skipear
+            return None
+        # ML acepta números enteros como int o float; usamos int si es entero
+        n_value = int(num) if num.is_integer() else num
+        return {
+            "id": attr_id,
+            "value_struct": {"number": n_value, "unit": unit},
+        }
+
+    if value_type == "list":
+        # Lista cerrada — matchear case-insensitive contra values permitidos
+        allowed = attr_def.get("values") or []
+        val_lower = val_str.lower()
+        for v in allowed:
+            name = (v.get("name") or "").strip()
+            if name.lower() == val_lower:
+                # Match exacto → mandamos value_id (más confiable)
+                return {"id": attr_id, "value_id": v.get("id")}
+        # Sin match: si la lista es estricta ML rechaza; mandamos value_name
+        # como fallback y dejamos que ML responda
+        return {"id": attr_id, "value_name": val_str}
+
+    # string, boolean, etc.
+    return {"id": attr_id, "value_name": val_str}
+
+
 def _ficha_to_ml_attributes(
     producto: Producto,
     category_attrs: list[dict],
@@ -296,9 +368,13 @@ def _ficha_to_ml_attributes(
     Convierte los atributos del producto (campos dedicados + ficha_tecnica)
     en el array `attributes` que espera POST /items.
 
-    Para cada atributo definido por la categoría ML, busca el valor usando
-    `get_producto_attr_value` que mira primero los campos dedicados del producto
-    (BRAND → producto.marca) y luego ficha_tecnica.
+    Para cada atributo definido por la categoría ML:
+      1. Busca el valor con `get_producto_attr_value` (campos dedicados → ficha)
+      2. Lo formatea según value_type vía `_format_attr_for_ml`
+      3. Si formatear falla (ej texto en atributo numérico), se skipea
+
+    Esto evita que un atributo opcional con valor mal formateado tire abajo
+    todo el POST.
     """
     if not category_attrs:
         return []
@@ -308,8 +384,11 @@ def _ficha_to_ml_attributes(
         if not attr_id:
             continue
         value = get_producto_attr_value(producto, attr_id, attr.get("name") or "")
-        if value:
-            out.append({"id": attr_id, "value_name": value})
+        if not value:
+            continue
+        formatted = _format_attr_for_ml(attr, value)
+        if formatted:
+            out.append(formatted)
     return out
 
 
