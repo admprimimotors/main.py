@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.32.0"
+APP_VERSION = "0.33.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -294,6 +294,8 @@ async def catalogo_upload(
             msg += f", {result.compats_creadas} compatibilidades"
             if result.vehiculos_creados:
                 msg += f" ({result.vehiculos_creados} vehículos nuevos)"
+        if getattr(result, "info", None):
+            msg += ". " + " · ".join(result.info)
         request.session["flash"] = {"type": "success", "msg": msg}
     else:
         msg = (
@@ -303,6 +305,8 @@ async def catalogo_upload(
         )
         if len(result.errores) > 5:
             msg += f" (+{len(result.errores) - 5} más)"
+        if getattr(result, "info", None):
+            msg += ". " + " · ".join(result.info)
         request.session["flash"] = {"type": "warning", "msg": msg}
 
     return RedirectResponse("/catalogo", status_code=303)
@@ -1611,12 +1615,21 @@ def catalogo_publicar_form(
         }
         return RedirectResponse(f"/catalogo/{sku}", status_code=303)
 
-    # Resolver categoría: mapping guardado, o predicción del título
-    ml_cat_id, ml_cat_name, candidatos = ml_publisher.get_or_predict_ml_category(
-        db,
-        nuestra_categoria=prod.categoria,
-        titulo=prod.titulo or "",
-    )
+    # Resolver categoría:
+    #   1. ml_category_id seteado en el producto (desde el Excel)
+    #   2. Mapping guardado por nuestra_categoria
+    #   3. Predicción del título
+    candidatos = []
+    if (prod.ml_category_id or "").strip():
+        ml_cat_id = prod.ml_category_id.strip()
+        ml_cat_info = ml_client.get_category(db, ml_cat_id) or {}
+        ml_cat_name = ml_cat_info.get("name") or ml_cat_id
+    else:
+        ml_cat_id, ml_cat_name, candidatos = ml_publisher.get_or_predict_ml_category(
+            db,
+            nuestra_categoria=prod.categoria,
+            titulo=prod.titulo or "",
+        )
 
     cat_attrs = ml_client.get_category_attributes(db, ml_cat_id) if ml_cat_id else []
     req_attrs = ml_publisher.required_attributes(cat_attrs)

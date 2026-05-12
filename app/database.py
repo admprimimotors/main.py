@@ -159,6 +159,12 @@ def _apply_migrations() -> None:
         ADD COLUMN IF NOT EXISTS ml_variation_id VARCHAR(64)
         """,
         "CREATE INDEX IF NOT EXISTS ix_productos_ml_variation_id ON productos(ml_variation_id)",
+        # v13 (2026-05-11): override de categoría ML por producto. Si está
+        # seteado, lo usamos al publicar sin pasar por el predictor.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS ml_category_id VARCHAR(64)
+        """,
     ]
     try:
         with engine.begin() as conn:

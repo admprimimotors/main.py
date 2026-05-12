@@ -82,6 +82,12 @@ PRODUCTO_COL_ALIASES: dict[str, str] = {
     "ml_impuestos_pct": "ml_impuestos_pct",
     "impuestos_pct": "ml_impuestos_pct",
     "impuestos": "ml_impuestos_pct",
+    # ID de categoría ML por producto (override del auto-predict)
+    "ml_category_id": "ml_category_id",
+    "ml_categoria_id": "ml_category_id",
+    "categoria_id_ml": "ml_category_id",
+    "id_categoria_ml": "ml_category_id",
+    "category_id_ml": "ml_category_id",
     # URLs de fotos. Aceptamos varios separadores en la celda (`;`, `,`, `\n`).
     # No van a ficha_tecnica — se procesan post-upsert para crear FotoProducto.
     "fotos": "fotos_urls",
@@ -263,6 +269,8 @@ class UploadResult:
     compats_creadas: int = 0
     vehiculos_creados: int = 0
     errores: list[str] = field(default_factory=list)
+    # Mensajes informativos (no son errores) — ej "6 fotos cargadas desde URLs"
+    info: list[str] = field(default_factory=list)
 
     @property
     def productos_total(self) -> int:
@@ -359,6 +367,7 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             "ml_item_id": _parse_str(_g("ml_item_id")),
             "ml_permalink": _parse_str(_g("ml_permalink")),
             "ml_status": _parse_str(_g("ml_status")),
+            "ml_category_id": _parse_str(_g("ml_category_id")),
             "ml_envio_fijo": _parse_decimal(_g("ml_envio_fijo")),
             "ml_impuestos_pct": _parse_decimal(_g("ml_impuestos_pct")),
         })
@@ -390,6 +399,7 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
         "ml_item_id": "ml_item_id" in field_to_col,
         "ml_permalink": "ml_permalink" in field_to_col,
         "ml_status": "ml_status" in field_to_col,
+        "ml_category_id": "ml_category_id" in field_to_col,
         "ml_envio_fijo": "ml_envio_fijo" in field_to_col,
         "ml_impuestos_pct": "ml_impuestos_pct" in field_to_col,
     }
@@ -419,8 +429,8 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
         try:
             n_fotos = _attach_fotos_from_urls(db, fotos_por_sku)
             if n_fotos:
-                result.errores.append(
-                    f"ℹ {n_fotos} foto{'s' if n_fotos != 1 else ''} cargada{'s' if n_fotos != 1 else ''} desde URLs del Excel."
+                result.info.append(
+                    f"{n_fotos} foto{'s' if n_fotos != 1 else ''} cargada{'s' if n_fotos != 1 else ''} desde URLs del Excel"
                 )
         except Exception as e:
             result.errores.append(f"Error procesando fotos por URL: {type(e).__name__}: {e}")
@@ -1629,6 +1639,7 @@ def exportar_catalogo_xlsx(
             "Activo": "si" if p.activo else "no",
             "ML_Item_ID": p.ml_item_id or "",
             "ML_Variation_ID": p.ml_variation_id or "",
+            "ML_Category_ID": p.ml_category_id or "",
             "ML_Permalink": p.ml_permalink or "",
             "ML_Status": p.ml_status or "",
             "ML_Stock": p.ml_stock,

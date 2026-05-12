@@ -67,6 +67,14 @@ FREE_SHIPPING_MIN = Decimal(os.environ.get("ML_FREE_SHIPPING_MIN", "55000"))
 # Primi Motors confirmó tener FLEX activo en su cuenta.
 FLEX_ENABLED = os.environ.get("ML_FLEX_ENABLED", "true").lower() in ("1", "true", "yes")
 
+# Catalog opt-out: para que las publicaciones tengan TÍTULO EDITABLE después de
+# publicar, hay que decirle a ML "no me linkees al catálogo". ML por default
+# linkea a categorías que tienen catálogo (ej Camisas de Motor) y bloquea
+# la edición de título. Si seteamos catalog_listing=false, publicamos como
+# ítem "del vendedor" — título editable, pero perdemos exposure de catálogo.
+# Default: true (priorizamos edición de título sobre exposure de catálogo).
+ML_CATALOG_OPTOUT = os.environ.get("ML_CATALOG_OPTOUT", "true").lower() in ("1", "true", "yes")
+
 # Site ID (Argentina)
 SITE_ID = os.environ.get("ML_SITE_ID", "MLA")
 
@@ -434,9 +442,15 @@ def build_create_payload(
         "family_name": _derive_family_name(producto),
     }
 
-    # Title: solo si NO es catálogo. En catálogo ML lo genera a partir de la
-    # familia + atributos y rechaza si vos lo mandás.
-    if not is_catalog:
+    # Title vs catalog_listing:
+    #   - Si ML_CATALOG_OPTOUT está activo, publicamos opt-out con catalog_listing=false
+    #     → título editable. Mandamos title siempre.
+    #   - Si está desactivado (default catalog), mandamos title solo cuando la
+    #     categoría no es catálogo (en catálogo, ML genera el título).
+    if ML_CATALOG_OPTOUT:
+        payload["catalog_listing"] = False
+        payload["title"] = (producto.titulo or "").strip()[:60]
+    elif not is_catalog:
         payload["title"] = (producto.titulo or "").strip()[:60]
 
     # NOTA: la descripción ya no se manda en el POST. ML la maneja como un
@@ -561,9 +575,16 @@ def create_publication(
             "Si querés actualizarlo usá Push a ML."
         ), None
 
-    # Resolver categoría
+    # Resolver categoría:
+    #   1. Override explícito del caller (ej UI confirm)
+    #   2. ml_category_id seteado en el producto (desde el Excel)
+    #   3. Mapping cacheado por nuestra_categoria
+    #   4. Predictor ML
     if ml_category_id_override:
         ml_cat_id = ml_category_id_override
+        ml_cat_name = None
+    elif (prod.ml_category_id or "").strip():
+        ml_cat_id = prod.ml_category_id.strip()
         ml_cat_name = None
     else:
         ml_cat_id, ml_cat_name, _candidatos = get_or_predict_ml_category(
@@ -605,7 +626,28 @@ def create_publication(
     try:
         resp = ml_client.create_item(db, payload)
     except ml_client.MLClientError as e:
-        return False, f"ML rechazó la publicación: {e}", None
+        err_str = str(e).lower()
+        # Si fallamos por catalog_listing=false en una categoría catálogo-mandatory,
+        # reintentamos sin opt-out (la publicación pierde título editable pero
+        # se publica). Detectamos por palabras clave en el mensaje de error.
+        catalog_fail_signals = (
+            "catalog_listing", "catalog listing", "mandatory catalog",
+            "must be catalog", "catalog_product"
+        )
+        if (
+            payload.get("catalog_listing") is False
+            and any(sig in err_str for sig in catalog_fail_signals)
+        ):
+            retry_payload = dict(payload)
+            retry_payload.pop("catalog_listing", None)
+            # En catálogo, ML rechaza title — sacarlo también
+            retry_payload.pop("title", None)
+            try:
+                resp = ml_client.create_item(db, retry_payload)
+            except ml_client.MLClientError as e2:
+                return False, f"ML rechazó la publicación (con/sin opt-out): {e2}", None
+        else:
+            return False, f"ML rechazó la publicación: {e}", None
     except Exception as e:
         return False, f"Error inesperado creando publicación: {type(e).__name__}: {e}", None
 
@@ -756,7 +798,10 @@ def build_matrix_payload(
         "variations": variations_block,
     }
 
-    if not is_catalog:
+    if ML_CATALOG_OPTOUT:
+        payload["catalog_listing"] = False
+        payload["title"] = (master.titulo or "").strip()[:60]
+    elif not is_catalog:
         payload["title"] = (master.titulo or "").strip()[:60]
 
     return payload
@@ -809,9 +854,11 @@ def create_matrix_publication(
             f"despublicarse antes: {skus_pub}"
         ), None, 0
 
-    # Resolver categoría desde el master
+    # Resolver categoría desde el master (con el mismo orden que create_publication)
     if ml_category_id_override:
         ml_cat_id = ml_category_id_override
+    elif (master.ml_category_id or "").strip():
+        ml_cat_id = master.ml_category_id.strip()
     else:
         ml_cat_id, _name, _ = get_or_predict_ml_category(
             db, nuestra_categoria=master.categoria, titulo=master.titulo or "",
@@ -875,7 +922,24 @@ def create_matrix_publication(
     try:
         resp = ml_client.create_item(db, payload)
     except ml_client.MLClientError as e:
-        return False, f"ML rechazó la publicación matriz: {e}", None, 0
+        err_str = str(e).lower()
+        catalog_fail_signals = (
+            "catalog_listing", "catalog listing", "mandatory catalog",
+            "must be catalog", "catalog_product"
+        )
+        if (
+            payload.get("catalog_listing") is False
+            and any(sig in err_str for sig in catalog_fail_signals)
+        ):
+            retry_payload = dict(payload)
+            retry_payload.pop("catalog_listing", None)
+            retry_payload.pop("title", None)
+            try:
+                resp = ml_client.create_item(db, retry_payload)
+            except ml_client.MLClientError as e2:
+                return False, f"ML rechazó la publicación matriz (con/sin opt-out): {e2}", None, 0
+        else:
+            return False, f"ML rechazó la publicación matriz: {e}", None, 0
     except Exception as e:
         return False, f"Error inesperado: {type(e).__name__}: {e}", None, 0
 

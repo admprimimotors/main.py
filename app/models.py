@@ -107,6 +107,11 @@ class Producto(Base):
     # publicado como ítem simple (sin variantes) o todavía no publicado.
     # Combinación (ml_item_id, ml_variation_id) identifica unívocamente la variante.
     ml_variation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # ID de categoría ML para usar al publicar este producto (override del
+    # auto-predict). Si está seteado, lo usamos directamente y no llamamos al
+    # predictor de ML. Se puede cargar desde el Excel con la columna
+    # `ML_Category_ID` / `categoria_id_ml`.
+    ml_category_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     ml_permalink: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     ml_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     # Snapshots de lo que ML reportó la última vez que sincronizamos.
