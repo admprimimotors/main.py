@@ -335,12 +335,9 @@ def _format_attr_for_ml(attr_def: dict, raw_value: str) -> Optional[dict]:
         if not unit:
             # Sin unidad en el valor: preferimos "mm" si está permitido (estándar
             # para autopartes); si no, usamos la primera permitida.
-            # NUNCA pulgadas (") por default — ML a veces las pone primero pero
-            # los productos de autopartes argentinos casi siempre van en mm.
             if "mm" in allowed_ids:
                 unit = "mm"
             elif allowed_ids:
-                # Tomar la primera unidad metric (no pulgadas)
                 non_inch = [u for u in allowed_ids if u not in ('"', "''", "in")]
                 unit = non_inch[0] if non_inch else allowed_ids[0]
         if not unit:
@@ -348,8 +345,13 @@ def _format_attr_for_ml(attr_def: dict, raw_value: str) -> Optional[dict]:
             return {"id": attr_id, "value_name": str(n_show)}
         # ML acepta números enteros como int o float; usamos int si es entero
         n_value = int(num) if num.is_integer() else num
+        # Mandamos AMBOS value_name y value_struct. Algunas categorías ML solo
+        # respetan value_name al hacer PUT/POST (especialmente publicaciones
+        # con catálogo), otras prefieren value_struct. Mandar los dos cubre
+        # ambos casos sin penalty.
         return {
             "id": attr_id,
+            "value_name": f"{n_value} {unit}",
             "value_struct": {"number": n_value, "unit": unit},
         }
 

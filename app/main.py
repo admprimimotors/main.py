@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.35.1"
+APP_VERSION = "0.35.3"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1396,6 +1396,69 @@ async def catalogo_ficha_save(
 # ===============================================================
 # Publicación de productos NUEVOS a Mercado Libre (POST /items)
 # ===============================================================
+
+@app.get("/api/ml/item-debug")
+def api_ml_item_debug(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Debug: trae el estado actual de una publicación ML a partir del SKU local.
+    Muestra qué atributos tiene ML guardados con valor y cuáles vacíos.
+    Útil para diagnosticar por qué un atributo "no se ve" en la publicación.
+
+    Uso: /api/ml/item-debug?sku=UX%201902000
+    """
+    prod = db.execute(
+        select_(catalogo.Producto).where(catalogo.Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return JSONResponse({"error": f"SKU '{sku}' no existe"}, status_code=404)
+    if not prod.ml_item_id:
+        return JSONResponse({"error": "Producto no vinculado a ML"}, status_code=400)
+
+    try:
+        item = ml_client.get_item(db, prod.ml_item_id)
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Error trayendo item de ML: {type(e).__name__}: {e}"},
+            status_code=502,
+        )
+
+    attrs = item.get("attributes") or []
+    con_valor = []
+    sin_valor = []
+    for a in attrs:
+        info = {
+            "id": a.get("id"),
+            "name": a.get("name"),
+            "value_name": a.get("value_name"),
+            "value_id": a.get("value_id"),
+            "value_struct": a.get("value_struct"),
+        }
+        if a.get("value_name") or a.get("value_id") or a.get("value_struct"):
+            con_valor.append(info)
+        else:
+            sin_valor.append(info)
+
+    return JSONResponse({
+        "ml_item_id": item.get("id"),
+        "title": item.get("title"),
+        "category_id": item.get("category_id"),
+        "catalog_listing": item.get("catalog_listing"),
+        "catalog_product_id": item.get("catalog_product_id"),
+        "status": item.get("status"),
+        "available_quantity": item.get("available_quantity"),
+        "permalink": item.get("permalink"),
+        "pictures_count": len(item.get("pictures") or []),
+        "attributes_con_valor": con_valor,
+        "attributes_sin_valor": sin_valor,
+        "n_atributos_con_valor": len(con_valor),
+        "n_atributos_sin_valor": len(sin_valor),
+    })
+
 
 @app.get("/api/ml/category-attributes")
 def api_ml_category_attributes(

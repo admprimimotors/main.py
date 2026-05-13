@@ -2088,12 +2088,36 @@ def push_to_ml(
     if "atributos" in actions:
         try:
             ml_client.update_item_attributes(db, prod.ml_item_id, attr_changes)
-            # NOTA: ML responde 200 al PUT pero el response a veces incluye
-            # estado viejo (la actualización se propaga async en ML).
-            # Por eso NO hacemos diff aquí — solo reportamos cuántos mandamos.
-            # Para verificar realmente qué aplicó, hacer GET /items unos segundos
-            # después o revisar la publicación en ML.
-            msgs.append(f"{len(attr_changes)} atributos enviados")
+            # Verificación: hacemos un GET /items/{id} para ver qué quedó
+            # realmente aplicado. ML a veces responde el PUT con estado viejo
+            # (async), pero un GET inmediato refleja el estado actual.
+            try:
+                item_now = ml_client.get_item(db, prod.ml_item_id) or {}
+                attrs_now = item_now.get("attributes") or []
+                applied_ids = {
+                    a.get("id") for a in attrs_now
+                    if a.get("id") and (
+                        a.get("value_name")
+                        or a.get("value_id")
+                        or a.get("value_struct")
+                    )
+                }
+                sent_ids = {a.get("id") for a in attr_changes if a.get("id")}
+                applied = sent_ids & applied_ids
+                missing = sent_ids - applied_ids
+                if missing:
+                    msgs.append(
+                        f"{len(applied)}/{len(sent_ids)} atributos aplicados "
+                        f"(verificado vía GET) · ⚠ ML no aplicó: "
+                        f"{', '.join(sorted(missing))[:120]}"
+                    )
+                else:
+                    msgs.append(f"{len(attr_changes)} atributos aplicados")
+                # Actualizamos también el snapshot raw con el estado actual
+                prod.ml_raw_attributes = attrs_now
+            except Exception:
+                # Si la verificación falla, reportamos lo que mandamos
+                msgs.append(f"{len(attr_changes)} atributos enviados")
             # Refrescamos los raw_attributes con los nuevos values (parche optimista).
             # Soportamos los 3 shapes: value_name, value_id, value_struct.
             updated_raw = list(prod.ml_raw_attributes or [])
