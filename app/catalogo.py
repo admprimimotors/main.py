@@ -1933,38 +1933,41 @@ def push_to_ml(
     attr_changes: list[dict] = []
     if push_attributes:
         from . import ml_publisher
-        # Necesitamos saber qué categoría ML usa este producto. Lo más confiable:
-        # si tenemos snapshot raw_attributes vacío, hay que consultar a ML
-        # (cara pero la única vía); si hay raw, lo dejamos como antes.
-        cat_id = (prod.ml_category_id or "").strip()
-        if not cat_id:
-            # Tomar el category_id real de la publicación ML
-            try:
-                ml_item = ml_client.get_item(db, prod.ml_item_id)
-                cat_id = ml_item.get("category_id") or ""
-            except Exception:
-                cat_id = ""
+        # Estrategia robusta: traemos el estado REAL de ML (GET /items/{id}) y
+        # lo usamos como snapshot autoritativo, ignorando ml_raw_attributes
+        # cacheado. Esto evita el bug de snapshot stale: cuando el cache local
+        # tenía valores que ML rechazó silencioso, el diff anterior decía
+        # "todo sincronizado" y nunca reintentaba.
+        #
+        # Costo: 1 GET extra por push. Aceptable porque atributos no se pushean
+        # en cada save.
+        try:
+            ml_item_now = ml_client.get_item(db, prod.ml_item_id)
+        except Exception:
+            ml_item_now = {}
+        cat_id = (prod.ml_category_id or "").strip() or (ml_item_now.get("category_id") or "")
+        real_attrs_raw = ml_item_now.get("attributes") or []
+        # Snapshot real de ML (solo IDs con valor)
+        raw_by_id = {
+            (r.get("id") or ""): r for r in real_attrs_raw
+            if r.get("id") and (
+                r.get("value_name") or r.get("value_id") or r.get("value_struct")
+            )
+        }
         if cat_id:
             cat_attrs = ml_client.get_category_attributes(db, cat_id) or []
             full_payload_attrs = ml_publisher._ficha_to_ml_attributes(prod, cat_attrs)
-            # SELLER_SKU es atributo de sistema (no siempre en la categoría),
-            # lo agregamos siempre para que ML guarde el código del vendedor.
             if prod.sku and not any(a.get("id") == "SELLER_SKU" for a in full_payload_attrs):
                 full_payload_attrs.append({"id": "SELLER_SKU", "value_name": str(prod.sku)})
-            # Indexar raw por id para diff rápido
-            raw_by_id = {
-                (r.get("id") or ""): r for r in (prod.ml_raw_attributes or [])
-            }
             for a in full_payload_attrs:
                 aid = a.get("id")
                 if not aid:
                     continue
                 raw = raw_by_id.get(aid)
                 if raw is None:
-                    # No estaba en raw → atributo nuevo, mandar
+                    # No está aplicado en ML → mandar
                     attr_changes.append(a)
                     continue
-                # Comparar valor: si value_id presente, usar value_id; si no, value_name
                 old_id = (raw.get("value_id") or None)
                 old_name = (_attr_value_str(raw) or "").strip()
                 new_id = a.get("value_id")
@@ -1974,10 +1977,11 @@ def push_to_ml(
                 if not new_id and not old_id and new_name == old_name:
                     continue
                 attr_changes.append(a)
+            # Actualizamos el snapshot local con lo que ML realmente tiene ahora
+            prod.ml_raw_attributes = real_attrs_raw
         else:
-            # Fallback: diff vs raw_attributes como antes (no podemos sumar new attrs)
             attr_changes = _diff_attributes_for_push(
-                prod.ml_raw_attributes or [], prod.ficha_tecnica or {}
+                real_attrs_raw, prod.ficha_tecnica or {}
             )
 
     # Decidir qué pushear según los flags y los datos disponibles
@@ -2091,6 +2095,13 @@ def push_to_ml(
             # Verificación: hacemos un GET /items/{id} para ver qué quedó
             # realmente aplicado. ML a veces responde el PUT con estado viejo
             # (async), pero un GET inmediato refleja el estado actual.
+            #
+            # IMPORTANTE: el GET es nuestra ÚNICA fuente de verdad para el
+            # snapshot. Antes había un "parche optimista" que escribía los
+            # valores enviados al snapshot asumiendo que ML los aceptaba —
+            # eso causaba que el diff siguiente pensara "ya están aplicados"
+            # cuando en realidad ML los había rechazado silenciosamente.
+            # Resultado: nunca más se reintentaba el PUT.
             try:
                 item_now = ml_client.get_item(db, prod.ml_item_id) or {}
                 attrs_now = item_now.get("attributes") or []
@@ -2113,39 +2124,10 @@ def push_to_ml(
                     )
                 else:
                     msgs.append(f"{len(attr_changes)} atributos aplicados")
-                # Actualizamos también el snapshot raw con el estado actual
+                # Actualizamos el snapshot con lo que ML realmente tiene
                 prod.ml_raw_attributes = attrs_now
             except Exception:
-                # Si la verificación falla, reportamos lo que mandamos
-                msgs.append(f"{len(attr_changes)} atributos enviados")
-            # Refrescamos los raw_attributes con los nuevos values (parche optimista).
-            # Soportamos los 3 shapes: value_name, value_id, value_struct.
-            updated_raw = list(prod.ml_raw_attributes or [])
-            existing_ids = {r.get("id") for r in updated_raw}
-            changes_by_id = {c["id"]: c for c in attr_changes if c.get("id")}
-            for r in updated_raw:
-                ch = changes_by_id.get(r.get("id"))
-                if not ch:
-                    continue
-                # Limpiar campos previos y aplicar el shape nuevo
-                r.pop("value_name", None)
-                r.pop("value_id", None)
-                r.pop("value_struct", None)
-                if "value_id" in ch:
-                    r["value_id"] = ch["value_id"]
-                if "value_name" in ch:
-                    r["value_name"] = ch["value_name"]
-                if "value_struct" in ch:
-                    r["value_struct"] = ch["value_struct"]
-            # Agregar atributos nuevos que no estaban en raw
-            for cid, ch in changes_by_id.items():
-                if cid not in existing_ids:
-                    new_raw = {"id": cid}
-                    if "value_id" in ch: new_raw["value_id"] = ch["value_id"]
-                    if "value_name" in ch: new_raw["value_name"] = ch["value_name"]
-                    if "value_struct" in ch: new_raw["value_struct"] = ch["value_struct"]
-                    updated_raw.append(new_raw)
-            prod.ml_raw_attributes = updated_raw
+                msgs.append(f"{len(attr_changes)} atributos enviados (verificación falló)")
         except ml_client.MLClientError as e:
             errors.append(f"atributos fallaron: {e}")
 

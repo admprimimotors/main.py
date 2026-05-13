@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.35.4"
+APP_VERSION = "0.36.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1445,9 +1445,17 @@ def api_ml_push_preview(
     if prod.sku and not any(a.get("id") == "SELLER_SKU" for a in full_payload_attrs):
         full_payload_attrs.append({"id": "SELLER_SKU", "value_name": str(prod.sku)})
 
-    # Diff vs snapshot
+    # Diff vs estado REAL de ML (no snapshot stale)
+    try:
+        item_real = ml_client.get_item(db, prod.ml_item_id)
+        real_attrs = item_real.get("attributes") or []
+    except Exception:
+        real_attrs = prod.ml_raw_attributes or []
     raw_by_id = {
-        (r.get("id") or ""): r for r in (prod.ml_raw_attributes or [])
+        (r.get("id") or ""): r for r in real_attrs
+        if r.get("id") and (
+            r.get("value_name") or r.get("value_id") or r.get("value_struct")
+        )
     }
     attr_changes = []
     skipped_unchanged = []
