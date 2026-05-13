@@ -1947,6 +1947,10 @@ def push_to_ml(
         if cat_id:
             cat_attrs = ml_client.get_category_attributes(db, cat_id) or []
             full_payload_attrs = ml_publisher._ficha_to_ml_attributes(prod, cat_attrs)
+            # SELLER_SKU es atributo de sistema (no siempre en la categoría),
+            # lo agregamos siempre para que ML guarde el código del vendedor.
+            if prod.sku and not any(a.get("id") == "SELLER_SKU" for a in full_payload_attrs):
+                full_payload_attrs.append({"id": "SELLER_SKU", "value_name": str(prod.sku)})
             # Indexar raw por id para diff rápido
             raw_by_id = {
                 (r.get("id") or ""): r for r in (prod.ml_raw_attributes or [])
@@ -2083,24 +2087,13 @@ def push_to_ml(
 
     if "atributos" in actions:
         try:
-            resp_item = ml_client.update_item_attributes(db, prod.ml_item_id, attr_changes)
-            # Diff: comparar qué atributos ML aceptó con valor vs lo que mandamos
-            attrs_after = (resp_item or {}).get("attributes") or []
-            attrs_with_value_after = {
-                a.get("id") for a in attrs_after
-                if a.get("id") and (
-                    a.get("value_name") or a.get("value_id") or a.get("value_struct")
-                )
-            }
-            sent_ids = {a.get("id") for a in attr_changes if a.get("id")}
-            dropped = sent_ids - attrs_with_value_after
-            if dropped:
-                msgs.append(
-                    f"{len(sent_ids) - len(dropped)}/{len(sent_ids)} atributos · "
-                    f"⚠ descartados: {', '.join(sorted(dropped))[:120]}"
-                )
-            else:
-                msgs.append(f"{len(attr_changes)} atributos")
+            ml_client.update_item_attributes(db, prod.ml_item_id, attr_changes)
+            # NOTA: ML responde 200 al PUT pero el response a veces incluye
+            # estado viejo (la actualización se propaga async en ML).
+            # Por eso NO hacemos diff aquí — solo reportamos cuántos mandamos.
+            # Para verificar realmente qué aplicó, hacer GET /items unos segundos
+            # después o revisar la publicación en ML.
+            msgs.append(f"{len(attr_changes)} atributos enviados")
             # Refrescamos los raw_attributes con los nuevos values (parche optimista).
             # Soportamos los 3 shapes: value_name, value_id, value_struct.
             updated_raw = list(prod.ml_raw_attributes or [])

@@ -606,6 +606,12 @@ def build_create_payload(
     listing_type_id = listing_type_id or DEFAULT_LISTING_TYPE
     initial_status = initial_status or DEFAULT_INITIAL_STATUS
 
+    attributes = _ficha_to_ml_attributes(producto, category_attrs)
+    # SELLER_SKU es un atributo de sistema (válido para casi todas las categorías)
+    # que ML usa como "código del vendedor". Lo agregamos siempre con el SKU local.
+    if producto.sku and not any(a.get("id") == "SELLER_SKU" for a in attributes):
+        attributes.append({"id": "SELLER_SKU", "value_name": str(producto.sku)})
+
     payload: dict = {
         "category_id": ml_category_id,
         "price": float(producto.precio_final or 0),
@@ -617,11 +623,14 @@ def build_create_payload(
         "pictures": _photo_urls(producto),
         "shipping": _shipping_block(producto.precio_final or Decimal("0")),
         "sale_terms": _sale_terms_block(),
-        "attributes": _ficha_to_ml_attributes(producto, category_attrs),
+        "attributes": attributes,
         "status": initial_status,
         # family_name: requerido por ML para categorías con catálogo. Si la
         # categoría no es de catálogo, ML lo ignora silenciosamente.
         "family_name": _derive_family_name(producto),
+        # seller_custom_field: alias top-level usado por ML para identificar el
+        # SKU del vendedor. Lo mandamos además de SELLER_SKU como atributo.
+        "seller_custom_field": producto.sku or "",
     }
 
     # Title vs catalog_listing:
@@ -735,53 +744,21 @@ def build_description_text(producto: Producto) -> str:
     Arma una descripción plain-text para mandar a ML.
 
     Estrategia:
-      - Si el producto tiene `descripcion` cargada → la usamos como texto principal
-        y le APENDEAMOS la ficha técnica + compats abajo (separador claro).
-      - Si no → autogeneramos todo desde el título + ficha técnica +
-        compatibilidades vehiculares + footer estándar.
+      - Si el producto tiene `descripcion` cargada → la usamos tal cual.
+      - Si no → autogeneramos a partir del título + ficha técnica +
+        compatibilidades vehiculares + footer estándar (fallback).
 
-    El append automático de specs es importante para publicaciones en
-    categorías-catálogo de ML, donde los atributos como LENGTH, INSIDE_DIAMETER
-    quedan locked y no se pueden editar — así el comprador igual ve toda la
-    info técnica en la descripción.
-
-    Controlable con env var ML_APPEND_SPECS_TO_DESCRIPTION (default true).
+    El texto resultante es plain-text con saltos de línea (ML acepta
+    plain_text vía PUT /items/{id}/description).
     """
-    append_specs = os.environ.get(
-        "ML_APPEND_SPECS_TO_DESCRIPTION", "true"
-    ).lower() in ("1", "true", "yes")
-
-    ficha_block = _format_ficha_block(producto)
-    compats_block = _format_compats_block(producto)
+    # Caso 1: descripción manual cargada → la usamos tal cual.
     custom = (producto.descripcion or "").strip()
-
-    footer = [
-        "─" * 30,
-        "PRIMI MOTORS",
-        "Garantía 30 días de fábrica · Envío gratis con FLEX (CABA y GBA)",
-    ]
-
-    # Caso 1: tiene descripción manual + append activo → manual + specs + footer
-    if custom and append_specs:
-        parts = [custom]
-        if ficha_block or compats_block:
-            parts.append("")
-            parts.append("─" * 30)
-            if ficha_block:
-                parts.append("")
-                parts.append(ficha_block)
-            if compats_block:
-                parts.append("")
-                parts.append(compats_block)
-        parts.append("")
-        parts.extend(footer)
-        return "\n".join(parts).strip()
-
-    # Caso 2: descripción manual sin append → solo manual
-    if custom and not append_specs:
+    if custom:
         return custom
 
-    # Caso 3: sin descripción manual → autogenerar todo
+    # Caso 2: sin descripción manual → autogeneramos completo desde ficha + compats.
+    ficha_block = _format_ficha_block(producto)
+    compats_block = _format_compats_block(producto)
     parts: list[str] = []
     if producto.titulo:
         parts.append(producto.titulo.strip())
@@ -792,7 +769,9 @@ def build_description_text(producto: Producto) -> str:
     if compats_block:
         parts.append(compats_block)
         parts.append("")
-    parts.extend(footer)
+    parts.append("─" * 30)
+    parts.append("PRIMI MOTORS")
+    parts.append("Garantía 30 días de fábrica · Envío gratis con FLEX (CABA y GBA)")
     return "\n".join(parts).strip()
 
 
@@ -927,23 +906,15 @@ def create_publication(
     if not new_id:
         return False, f"ML respondió sin id de item: {resp}", None
 
-    # ---- DIAGNÓSTICO: comparar lo que mandamos vs lo que ML aceptó ----
-    sent_attr_ids = {a.get("id") for a in (payload.get("attributes") or []) if a.get("id")}
-    received_attr_ids = {
-        a.get("id") for a in (resp.get("attributes") or [])
-        if a.get("id") and (a.get("value_name") or a.get("value_id") or a.get("value_struct"))
-    }
-    attrs_droppeados = sent_attr_ids - received_attr_ids
-
+    # Diagnóstico de fotos: comparamos lo que mandamos vs lo que ML devolvió
+    # en la respuesta del POST. Ese conteo SÍ es confiable para fotos.
+    # No hacemos diff de atributos porque ML a veces refleja el estado async
+    # y el response puede no tener todavía los valores aplicados.
     sent_pics = len(payload.get("pictures") or [])
     received_pics = len(resp.get("pictures") or [])
     pics_droppeadas = sent_pics - received_pics
 
     diag_parts = []
-    if attrs_droppeados:
-        diag_parts.append(
-            f"⚠ Atributos descartados por ML: {', '.join(sorted(attrs_droppeados))}"
-        )
     if pics_droppeadas > 0:
         diag_parts.append(
             f"⚠ ML descartó {pics_droppeadas} de {sent_pics} foto(s) (URL no descargable)"
@@ -1068,11 +1039,18 @@ def build_matrix_payload(
 
         var_pictures = [{"source": _normalize_picture_url(f.url)} for f in (v.fotos or []) if f.url]
 
+        # Atributos opcionales por variación: solo SELLER_SKU por ahora.
+        # ML acepta `attributes` array dentro de cada variation también.
+        var_attrs = []
+        if v.sku:
+            var_attrs.append({"id": "SELLER_SKU", "value_name": str(v.sku)})
+
         variations_block.append({
             "attribute_combinations": [combo],
             "price": float(v.precio_final or 0),
             "available_quantity": int(v.stock_actual or 0),
             "seller_custom_field": v.sku,
+            "attributes": var_attrs,
             # ML acepta `pictures` o `picture_ids`. Con `pictures` nos podemos
             # ahorrar un upload previo (ML toma las URLs y las descarga).
             "pictures": var_pictures,
