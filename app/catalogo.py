@@ -2079,15 +2079,13 @@ def push_to_ml(
             ml_client.update_item_title(db, prod.ml_item_id, prod.titulo)
             msgs.append("título")
         except ml_client.MLClientError as e:
-            # En categorías catálogo ML rechaza el PUT de título. Lo
-            # reportamos como warning, no error, para no marcar falla todo el push.
+            # Mostramos el error REAL de ML para diagnosticar correctamente.
+            # Antes asumíamos "es problema de catálogo" pero a veces es otra cosa
+            # (largo > 60, caracteres, item cerrado, etc.).
             err_str = str(e)
-            if "title" in err_str.lower() or "catalog" in err_str.lower():
-                errors.append(
-                    "título no actualizado (ML lo genera del catálogo en esta categoría)"
-                )
-            else:
-                errors.append(f"título falló: {e}")
+            # Acortamos el mensaje para que no inunde el flash, pero mantenemos
+            # la causa real del rechazo.
+            errors.append(f"título no actualizado · ML: {err_str[:280]}")
 
     if "atributos" in actions:
         try:
