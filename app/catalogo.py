@@ -2079,13 +2079,28 @@ def push_to_ml(
             ml_client.update_item_title(db, prod.ml_item_id, prod.titulo)
             msgs.append("título")
         except ml_client.MLClientError as e:
-            # Mostramos el error REAL de ML para diagnosticar correctamente.
-            # Antes asumíamos "es problema de catálogo" pero a veces es otra cosa
-            # (largo > 60, caracteres, item cerrado, etc.).
             err_str = str(e)
-            # Acortamos el mensaje para que no inunde el flash, pero mantenemos
-            # la causa real del rechazo.
-            errors.append(f"título no actualizado · ML: {err_str[:280]}")
+            # Si el rechazo es por family_name lockeando el título, intentamos
+            # removerlo (PUT family_name="") y reintentar el título.
+            # Esto pasa con publicaciones creadas antes del fix donde mandamos
+            # family_name junto con catalog_listing=false.
+            if "family_name" in err_str.lower():
+                try:
+                    # PUT items/{id} con family_name="" → ML remueve el lock
+                    ml_client._put(
+                        db, f"/items/{prod.ml_item_id}",
+                        {"family_name": ""}
+                    )
+                    # Reintentar el título
+                    ml_client.update_item_title(db, prod.ml_item_id, prod.titulo)
+                    msgs.append("título (con remove de family_name)")
+                except ml_client.MLClientError as e2:
+                    errors.append(
+                        f"título no actualizado · intenté remover family_name "
+                        f"y falló: {str(e2)[:200]}"
+                    )
+            else:
+                errors.append(f"título no actualizado · ML: {err_str[:280]}")
 
     if "atributos" in actions:
         try:

@@ -627,13 +627,15 @@ def build_create_payload(
         "sale_terms": _sale_terms_block(),
         "attributes": attributes,
         "status": initial_status,
-        # family_name: requerido por ML para categorías con catálogo. Si la
-        # categoría no es de catálogo, ML lo ignora silenciosamente.
-        "family_name": _derive_family_name(producto),
         # seller_custom_field: alias top-level usado por ML para identificar el
         # SKU del vendedor. Lo mandamos además de SELLER_SKU como atributo.
         "seller_custom_field": producto.sku or "",
     }
+    # family_name: SOLO si vamos a publicar como catálogo. Si publicamos opt-out
+    # (catalog_listing=false), mandar family_name nos lockearía el título.
+    # ML lo necesita en categorías de catálogo, y solo ahí.
+    if not ML_CATALOG_OPTOUT:
+        payload["family_name"] = _derive_family_name(producto)
 
     # Title vs catalog_listing:
     #   - Si ML_CATALOG_OPTOUT está activo, publicamos opt-out con catalog_listing=false
@@ -892,6 +894,9 @@ def create_publication(
             retry_payload.pop("catalog_listing", None)
             # En catálogo, ML rechaza title — sacarlo también
             retry_payload.pop("title", None)
+            # Y en catálogo ML SÍ necesita family_name (lo que en opt-out
+            # omitimos para no lockear el título). Lo agregamos al retry.
+            retry_payload["family_name"] = _derive_family_name(prod)
             try:
                 resp = ml_client.create_item(db, retry_payload)
             except ml_client.MLClientError as e2:
@@ -1070,15 +1075,17 @@ def build_matrix_payload(
         "sale_terms": _sale_terms_block(),
         "attributes": item_attrs,
         "status": initial_status,
-        "family_name": _derive_family_name(master),
         "variations": variations_block,
     }
 
     if ML_CATALOG_OPTOUT:
         payload["catalog_listing"] = False
         payload["title"] = (master.titulo or "").strip()[:60]
-    elif not is_catalog:
-        payload["title"] = (master.titulo or "").strip()[:60]
+        # Sin family_name para que el título quede editable
+    else:
+        payload["family_name"] = _derive_family_name(master)
+        if not is_catalog:
+            payload["title"] = (master.titulo or "").strip()[:60]
 
     return payload
 
@@ -1214,6 +1221,8 @@ def create_matrix_publication(
             retry_payload = dict(payload)
             retry_payload.pop("catalog_listing", None)
             retry_payload.pop("title", None)
+            # Cataloga matrix necesita family_name (lo omitimos en opt-out)
+            retry_payload["family_name"] = _derive_family_name(master)
             try:
                 resp = ml_client.create_item(db, retry_payload)
             except ml_client.MLClientError as e2:

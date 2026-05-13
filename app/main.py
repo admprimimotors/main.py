@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.36.1"
+APP_VERSION = "0.36.2"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
