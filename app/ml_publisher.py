@@ -643,77 +643,157 @@ def build_create_payload(
     return payload
 
 
-def build_description_text(producto: Producto) -> str:
+def _format_ficha_block(producto: Producto) -> str:
     """
-    Arma una descripción plain-text para mandar a ML cuando hace falta:
-      - Si el producto tiene `descripcion` cargada → la usamos tal cual.
-      - Si no → autogeneramos a partir del título + ficha técnica +
-        compatibilidades vehiculares + footer estándar.
-
-    El texto resultante es plain-text con saltos de línea (ML acepta
-    plain_text vía PUT /items/{id}/description).
+    Formatea la ficha técnica como un bloque plain-text con bullets.
+    Las keys de "unidad_de_X" se mergean con su key X correspondiente para
+    quedar como "LARGO: 215.9 mm" en lugar de dos líneas.
+    Devuelve string vacío si no hay ficha.
     """
-    # Caso simple: descripción cargada manualmente
-    custom = (producto.descripcion or "").strip()
-    if custom:
-        return custom
-
-    # Fallback: armar desde ficha técnica + compats
-    lines: list[str] = []
-
-    if producto.titulo:
-        lines.append(producto.titulo.strip())
-        lines.append("")
-
     ficha = producto.ficha_tecnica or {}
-    if ficha:
-        lines.append("FICHA TÉCNICA")
-        lines.append("─" * 30)
-        for k, v in ficha.items():
-            if v is None or str(v).strip() == "":
-                continue
-            label = str(k).replace("_", " ").upper()
-            lines.append(f"• {label}: {v}")
-        lines.append("")
+    if not ficha:
+        return ""
 
-    # Compatibilidades vehiculares (si existen)
+    # Detectar pares "atributo" / "unidad_de_atributo" y mergearlos
+    units_by_attr: dict[str, str] = {}
+    skip_keys: set[str] = set()
+    for k in list(ficha.keys()):
+        kl = str(k).lower()
+        for prefix in ("unidad_de_", "unidad_", "unit_"):
+            if kl.startswith(prefix):
+                attr_target = kl[len(prefix):]
+                if attr_target in ficha:
+                    units_by_attr[attr_target] = str(ficha[k]).strip()
+                    skip_keys.add(k)
+                break
+        for suffix in ("_unidad", "_unit"):
+            if kl.endswith(suffix) and len(kl) > len(suffix):
+                attr_target = kl[:-len(suffix)]
+                if attr_target in ficha:
+                    units_by_attr[attr_target] = str(ficha[k]).strip()
+                    skip_keys.add(k)
+                break
+
+    lines = ["FICHA TÉCNICA", "─" * 30]
+    for k, v in ficha.items():
+        if k in skip_keys:
+            continue
+        if v is None or str(v).strip() == "":
+            continue
+        label = str(k).replace("_", " ").upper()
+        val_str = str(v).strip()
+        unit = units_by_attr.get(str(k).lower())
+        if unit and not any(c.isalpha() for c in val_str):
+            # Solo agregamos la unidad si el valor no la tenía ya
+            val_str = f"{val_str} {unit}"
+        lines.append(f"• {label}: {val_str}")
+    return "\n".join(lines)
+
+
+def _format_compats_block(producto: Producto) -> str:
+    """
+    Formatea las compatibilidades vehiculares como bloque plain-text.
+    Devuelve string vacío si no hay compats.
+    """
     try:
         compats = list(producto.compatibilidades or [])
     except Exception:
         compats = []
-    if compats:
-        lines.append("COMPATIBILIDADES VEHICULARES")
-        lines.append("─" * 30)
-        for c in compats:
-            try:
-                v = c.vehiculo
-            except Exception:
-                continue
-            partes = [v.marca, v.modelo]
-            anio_range = ""
-            if v.anio_desde and v.anio_hasta and v.anio_desde != v.anio_hasta:
-                anio_range = f" ({v.anio_desde}-{v.anio_hasta})"
-            elif v.anio_desde:
-                anio_range = f" ({v.anio_desde}-)"
-            elif v.anio_hasta:
-                anio_range = f" (-{v.anio_hasta})"
-            motor = ""
-            if v.cilindrada_cc:
-                motor = f" {v.cilindrada_cc}cc"
-            if v.combustible:
-                motor += f" {v.combustible}"
-            line = "• " + " ".join(p for p in partes if p) + anio_range + motor
-            if c.notas:
-                line += f" — {c.notas}"
-            lines.append(line)
-        lines.append("")
+    if not compats:
+        return ""
 
-    # Footer estándar
-    lines.append("─" * 30)
-    lines.append("PRIMI MOTORS")
-    lines.append("Garantía 30 días de fábrica · Envío gratis con FLEX (CABA y GBA)")
+    lines = ["COMPATIBILIDADES VEHICULARES", "─" * 30]
+    for c in compats:
+        try:
+            v = c.vehiculo
+        except Exception:
+            continue
+        if v is None:
+            continue
+        partes = [v.marca, v.modelo]
+        anio_range = ""
+        if v.anio_desde and v.anio_hasta and v.anio_desde != v.anio_hasta:
+            anio_range = f" ({v.anio_desde}-{v.anio_hasta})"
+        elif v.anio_desde:
+            anio_range = f" ({v.anio_desde}-)"
+        elif v.anio_hasta:
+            anio_range = f" (-{v.anio_hasta})"
+        motor = ""
+        if v.cilindrada_cc:
+            motor = f" {v.cilindrada_cc}cc"
+        if v.combustible:
+            motor += f" {v.combustible}"
+        line = "• " + " ".join(p for p in partes if p) + anio_range + motor
+        if c.notas:
+            line += f" — {c.notas}"
+        lines.append(line)
+    return "\n".join(lines)
 
-    return "\n".join(lines).strip()
+
+def build_description_text(producto: Producto) -> str:
+    """
+    Arma una descripción plain-text para mandar a ML.
+
+    Estrategia:
+      - Si el producto tiene `descripcion` cargada → la usamos como texto principal
+        y le APENDEAMOS la ficha técnica + compats abajo (separador claro).
+      - Si no → autogeneramos todo desde el título + ficha técnica +
+        compatibilidades vehiculares + footer estándar.
+
+    El append automático de specs es importante para publicaciones en
+    categorías-catálogo de ML, donde los atributos como LENGTH, INSIDE_DIAMETER
+    quedan locked y no se pueden editar — así el comprador igual ve toda la
+    info técnica en la descripción.
+
+    Controlable con env var ML_APPEND_SPECS_TO_DESCRIPTION (default true).
+    """
+    append_specs = os.environ.get(
+        "ML_APPEND_SPECS_TO_DESCRIPTION", "true"
+    ).lower() in ("1", "true", "yes")
+
+    ficha_block = _format_ficha_block(producto)
+    compats_block = _format_compats_block(producto)
+    custom = (producto.descripcion or "").strip()
+
+    footer = [
+        "─" * 30,
+        "PRIMI MOTORS",
+        "Garantía 30 días de fábrica · Envío gratis con FLEX (CABA y GBA)",
+    ]
+
+    # Caso 1: tiene descripción manual + append activo → manual + specs + footer
+    if custom and append_specs:
+        parts = [custom]
+        if ficha_block or compats_block:
+            parts.append("")
+            parts.append("─" * 30)
+            if ficha_block:
+                parts.append("")
+                parts.append(ficha_block)
+            if compats_block:
+                parts.append("")
+                parts.append(compats_block)
+        parts.append("")
+        parts.extend(footer)
+        return "\n".join(parts).strip()
+
+    # Caso 2: descripción manual sin append → solo manual
+    if custom and not append_specs:
+        return custom
+
+    # Caso 3: sin descripción manual → autogenerar todo
+    parts: list[str] = []
+    if producto.titulo:
+        parts.append(producto.titulo.strip())
+        parts.append("")
+    if ficha_block:
+        parts.append(ficha_block)
+        parts.append("")
+    if compats_block:
+        parts.append(compats_block)
+        parts.append("")
+    parts.extend(footer)
+    return "\n".join(parts).strip()
 
 
 # =============================================================
