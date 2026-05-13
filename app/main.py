@@ -43,7 +43,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.35.3"
+APP_VERSION = "0.35.4"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1396,6 +1396,101 @@ async def catalogo_ficha_save(
 # ===============================================================
 # Publicación de productos NUEVOS a Mercado Libre (POST /items)
 # ===============================================================
+
+@app.get("/api/ml/push-preview")
+def api_ml_push_preview(
+    request: Request,
+    sku: str,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Devuelve EXACTAMENTE qué atributos se mandarían en un PUT a ML si pushearas
+    ahora. Útil para diagnosticar por qué un atributo de la ficha "no llega"
+    a ML.
+
+    Uso: /api/ml/push-preview?sku=UX%201902000
+
+    Respuesta:
+      - ficha_local: la ficha del producto
+      - raw_attributes_snapshot: snapshot guardado (lo que ML reportó última sync)
+      - category_id_efectivo: cat id que vamos a usar
+      - full_payload_attrs: TODO lo que generaría _ficha_to_ml_attributes
+      - attr_changes: lo que efectivamente se mandaría (diff vs snapshot)
+    """
+    prod = db.execute(
+        select_(catalogo.Producto).where(catalogo.Producto.sku == sku)
+    ).scalar_one_or_none()
+    if prod is None:
+        return JSONResponse({"error": f"SKU '{sku}' no existe"}, status_code=404)
+    if not prod.ml_item_id:
+        return JSONResponse({"error": "Producto no vinculado a ML"}, status_code=400)
+
+    # Obtener category id (mismo flujo que push_to_ml)
+    cat_id = (prod.ml_category_id or "").strip()
+    cat_source = "producto.ml_category_id"
+    if not cat_id:
+        try:
+            ml_item = ml_client.get_item(db, prod.ml_item_id)
+            cat_id = ml_item.get("category_id") or ""
+            cat_source = "ML.get_item.category_id"
+        except Exception as e:
+            return JSONResponse(
+                {"error": f"No pude obtener category_id: {e}"},
+                status_code=502,
+            )
+
+    cat_attrs = ml_client.get_category_attributes(db, cat_id) or []
+    full_payload_attrs = ml_publisher._ficha_to_ml_attributes(prod, cat_attrs)
+    if prod.sku and not any(a.get("id") == "SELLER_SKU" for a in full_payload_attrs):
+        full_payload_attrs.append({"id": "SELLER_SKU", "value_name": str(prod.sku)})
+
+    # Diff vs snapshot
+    raw_by_id = {
+        (r.get("id") or ""): r for r in (prod.ml_raw_attributes or [])
+    }
+    attr_changes = []
+    skipped_unchanged = []
+    for a in full_payload_attrs:
+        aid = a.get("id")
+        if not aid:
+            continue
+        raw = raw_by_id.get(aid)
+        if raw is None:
+            attr_changes.append(a)
+            continue
+        old_id = raw.get("value_id") or None
+        old_name = ""
+        if raw.get("value_name"):
+            old_name = str(raw["value_name"]).strip()
+        elif raw.get("value_struct"):
+            vs = raw["value_struct"]
+            old_name = f"{vs.get('number')} {vs.get('unit', '')}".strip()
+        new_id = a.get("value_id")
+        new_name = (a.get("value_name") or "").strip()
+        if new_id and old_id and new_id == old_id:
+            skipped_unchanged.append({"id": aid, "reason": "value_id sin cambio"})
+            continue
+        if not new_id and not old_id and new_name == old_name:
+            skipped_unchanged.append({"id": aid, "reason": f"value_name sin cambio ({old_name})"})
+            continue
+        attr_changes.append(a)
+
+    return JSONResponse({
+        "sku": prod.sku,
+        "ml_item_id": prod.ml_item_id,
+        "category_id_efectivo": cat_id,
+        "category_id_source": cat_source,
+        "ficha_local": prod.ficha_tecnica or {},
+        "raw_snapshot_count": len(prod.ml_raw_attributes or []),
+        "raw_snapshot_ids": sorted([r.get("id") for r in (prod.ml_raw_attributes or []) if r.get("id")]),
+        "full_payload_attrs": full_payload_attrs,
+        "full_payload_count": len(full_payload_attrs),
+        "attr_changes_to_send": attr_changes,
+        "attr_changes_count": len(attr_changes),
+        "skipped_unchanged": skipped_unchanged,
+    })
+
 
 @app.get("/api/ml/item-debug")
 def api_ml_item_debug(
