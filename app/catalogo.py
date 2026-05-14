@@ -2085,19 +2085,36 @@ def push_to_ml(
             # Esto pasa con publicaciones creadas antes del fix donde mandamos
             # family_name junto con catalog_listing=false.
             if "family_name" in err_str.lower():
-                try:
-                    # PUT items/{id} con family_name="" → ML remueve el lock
-                    ml_client._put(
-                        db, f"/items/{prod.ml_item_id}",
-                        {"family_name": ""}
-                    )
-                    # Reintentar el título
-                    ml_client.update_item_title(db, prod.ml_item_id, prod.titulo)
-                    msgs.append("título (con remove de family_name)")
-                except ml_client.MLClientError as e2:
+                # Intentamos varias formas de remover el family_name. ML es
+                # quisquilloso: a veces acepta null, a veces no acepta nada.
+                removed = False
+                last_err = None
+                for attempt_value in (None, " ", "_"):
+                    try:
+                        ml_client._put(
+                            db, f"/items/{prod.ml_item_id}",
+                            {"family_name": attempt_value}
+                        )
+                        removed = True
+                        break
+                    except ml_client.MLClientError as e_attempt:
+                        last_err = str(e_attempt)
+                        continue
+                if removed:
+                    try:
+                        ml_client.update_item_title(db, prod.ml_item_id, prod.titulo)
+                        msgs.append("título (con remove de family_name)")
+                    except ml_client.MLClientError as e2:
+                        errors.append(
+                            f"título no actualizado · removí family_name pero "
+                            f"el título sigue bloqueado: {str(e2)[:200]}"
+                        )
+                else:
                     errors.append(
-                        f"título no actualizado · intenté remover family_name "
-                        f"y falló: {str(e2)[:200]}"
+                        f"título no actualizado · ML no permite remover el "
+                        f"family_name de esta publicación. Para editarlo "
+                        f"hay que eliminar y volver a publicar. "
+                        f"Detalle: {(last_err or err_str)[:180]}"
                     )
             else:
                 errors.append(f"título no actualizado · ML: {err_str[:280]}")
