@@ -872,40 +872,64 @@ def create_publication(
         resp = ml_client.create_item(db, payload)
     except ml_client.MLClientError as e:
         err_str = str(e).lower()
-        # Si fallamos por catalog_listing=false en una categoría catálogo-mandatory,
-        # reintentamos sin opt-out (la publicación pierde título editable pero
-        # se publica). ML a veces dice "catalog_listing" explícito, otras dice
-        # "fields [title] are invalid" — ambas significan lo mismo: hay que
-        # sacar title y catalog_listing del payload.
-        catalog_fail_signals = (
-            "catalog_listing", "catalog listing", "mandatory catalog",
-            "must be catalog", "catalog_product",
-            # ML reporta así cuando la categoría obliga catálogo y le mandaste title:
-            "[title] are invalid",
-            "title] are invalid",
-            "fields [title]",
-            "body.invalid_fields",
-        )
+        # ML puede rechazar el opt-out de catálogo de tres maneras distintas:
+        #   A. Falta family_name (body.required_fields) → sumar family_name
+        #      pero MANTENER catalog_listing=false (algunas categorías lo aceptan).
+        #   B. Title inválido en catálogo (body.invalid_fields/[title]) →
+        #      remover catalog_listing + title, agregar family_name (modo catálogo).
+        #   C. catalog_listing mencionado explícito → mismo modo catálogo.
+
+        # Caso A: solo falta family_name. Lo agregamos manteniendo el opt-out.
         if (
             payload.get("catalog_listing") is False
-            and any(sig in err_str for sig in catalog_fail_signals)
+            and "family_name" not in payload
+            and "family_name" in err_str
+            and ("required" in err_str or "missing" in err_str)
         ):
             retry_payload = dict(payload)
-            retry_payload.pop("catalog_listing", None)
-            # En catálogo, ML rechaza title — sacarlo también
-            retry_payload.pop("title", None)
-            # Y en catálogo ML SÍ necesita family_name (lo que en opt-out
-            # omitimos para no lockear el título). Lo agregamos al retry.
             retry_payload["family_name"] = _derive_family_name(prod)
             try:
                 resp = ml_client.create_item(db, retry_payload)
             except ml_client.MLClientError as e2:
-                return False, (
-                    f"ML rechazó la publicación con catalog_listing=false ({e}), "
-                    f"reintenté sin él y también falló: {e2}"
-                ), None
+                # Sigue fallando: caer a modo catálogo completo (caso B/C)
+                fallback_payload = dict(retry_payload)
+                fallback_payload.pop("catalog_listing", None)
+                fallback_payload.pop("title", None)
+                try:
+                    resp = ml_client.create_item(db, fallback_payload)
+                except ml_client.MLClientError as e3:
+                    return False, (
+                        f"ML rechazó la publicación · sin family_name ({e}) "
+                        f"· con family_name pero opt-out ({e2}) "
+                        f"· modo catálogo ({e3})"
+                    ), None
         else:
-            return False, f"ML rechazó la publicación: {e}", None
+            # Caso B/C: catalog mandatory para esta categoría
+            catalog_fail_signals = (
+                "catalog_listing", "catalog listing", "mandatory catalog",
+                "must be catalog", "catalog_product",
+                "[title] are invalid",
+                "title] are invalid",
+                "fields [title]",
+                "body.invalid_fields",
+            )
+            if (
+                payload.get("catalog_listing") is False
+                and any(sig in err_str for sig in catalog_fail_signals)
+            ):
+                retry_payload = dict(payload)
+                retry_payload.pop("catalog_listing", None)
+                retry_payload.pop("title", None)
+                retry_payload["family_name"] = _derive_family_name(prod)
+                try:
+                    resp = ml_client.create_item(db, retry_payload)
+                except ml_client.MLClientError as e2:
+                    return False, (
+                        f"ML rechazó la publicación con catalog_listing=false ({e}), "
+                        f"reintenté sin él y también falló: {e2}"
+                    ), None
+            else:
+                return False, f"ML rechazó la publicación: {e}", None
     except Exception as e:
         return False, f"Error inesperado creando publicación: {type(e).__name__}: {e}", None
 
@@ -1206,32 +1230,55 @@ def create_matrix_publication(
         resp = ml_client.create_item(db, payload)
     except ml_client.MLClientError as e:
         err_str = str(e).lower()
-        catalog_fail_signals = (
-            "catalog_listing", "catalog listing", "mandatory catalog",
-            "must be catalog", "catalog_product",
-            "[title] are invalid",
-            "title] are invalid",
-            "fields [title]",
-            "body.invalid_fields",
-        )
+        # Caso A: solo falta family_name (mantenemos opt-out + agregamos)
         if (
             payload.get("catalog_listing") is False
-            and any(sig in err_str for sig in catalog_fail_signals)
+            and "family_name" not in payload
+            and "family_name" in err_str
+            and ("required" in err_str or "missing" in err_str)
         ):
             retry_payload = dict(payload)
-            retry_payload.pop("catalog_listing", None)
-            retry_payload.pop("title", None)
-            # Cataloga matrix necesita family_name (lo omitimos en opt-out)
             retry_payload["family_name"] = _derive_family_name(master)
             try:
                 resp = ml_client.create_item(db, retry_payload)
             except ml_client.MLClientError as e2:
-                return False, (
-                    f"ML rechazó la matriz con catalog_listing=false ({e}), "
-                    f"reintenté sin él y también falló: {e2}"
-                ), None, 0
+                fallback_payload = dict(retry_payload)
+                fallback_payload.pop("catalog_listing", None)
+                fallback_payload.pop("title", None)
+                try:
+                    resp = ml_client.create_item(db, fallback_payload)
+                except ml_client.MLClientError as e3:
+                    return False, (
+                        f"ML rechazó la matriz · sin family_name ({e}) · "
+                        f"con family_name pero opt-out ({e2}) · "
+                        f"modo catálogo ({e3})"
+                    ), None, 0
         else:
-            return False, f"ML rechazó la publicación matriz: {e}", None, 0
+            catalog_fail_signals = (
+                "catalog_listing", "catalog listing", "mandatory catalog",
+                "must be catalog", "catalog_product",
+                "[title] are invalid",
+                "title] are invalid",
+                "fields [title]",
+                "body.invalid_fields",
+            )
+            if (
+                payload.get("catalog_listing") is False
+                and any(sig in err_str for sig in catalog_fail_signals)
+            ):
+                retry_payload = dict(payload)
+                retry_payload.pop("catalog_listing", None)
+                retry_payload.pop("title", None)
+                retry_payload["family_name"] = _derive_family_name(master)
+                try:
+                    resp = ml_client.create_item(db, retry_payload)
+                except ml_client.MLClientError as e2:
+                    return False, (
+                        f"ML rechazó la matriz con catalog_listing=false ({e}), "
+                        f"reintenté sin él y también falló: {e2}"
+                    ), None, 0
+            else:
+                return False, f"ML rechazó la publicación matriz: {e}", None, 0
     except Exception as e:
         return False, f"Error inesperado: {type(e).__name__}: {e}", None, 0
 
