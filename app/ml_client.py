@@ -424,6 +424,26 @@ def update_item_title(db: Session, item_id: str, title: str) -> dict:
 # Compatibilidades (vehículos compatibles)
 # =============================================================
 
+def add_item_compatibilities(
+    db: Session,
+    item_id: str,
+    vehicle_ids: list[str],
+) -> dict:
+    """
+    POST /items/{id}/compatibilities con un array de IDs de vehículos del
+    catálogo de ML. Cada elemento del payload es {"id": "MLA-VEHICLE-..."}.
+
+    Reemplaza la lista de compatibilidades del item (no agrega, sobrescribe).
+    El caller debe haber chequeado is_write_enabled() antes.
+    """
+    if not item_id or not vehicle_ids:
+        return {}
+    payload = {
+        "compatibilities": [{"id": vid} for vid in vehicle_ids if vid]
+    }
+    return _post(db, f"/items/{item_id}/compatibilities", payload)
+
+
 def get_item_compatibilities(db: Session, item_id: str) -> list:
     """
     GET /items/{id}/compatibilities → lista de compatibilidades vehiculares.
