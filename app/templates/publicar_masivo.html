@@ -70,6 +70,34 @@
 </div>
 
 {% if rows %}
+{% set total_ready = rows|selectattr('ready_quick')|list|length %}
+{% set total_not_ready = (rows|length) - total_ready %}
+
+<!-- Toolbar de filtros + acciones masivas -->
+<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;">
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <button type="button" onclick="setFilter('all')" id="btn-filter-all"
+            class="btn btn-ghost" style="font-size: 12px; padding: 6px 12px;">
+      Todos ({{ rows|length }})
+    </button>
+    <button type="button" onclick="setFilter('ready')" id="btn-filter-ready"
+            class="btn" style="font-size: 12px; padding: 6px 12px;">
+      ✓ Listos para publicar ({{ total_ready }})
+    </button>
+    <button type="button" onclick="setFilter('notready')" id="btn-filter-notready"
+            class="btn btn-ghost" style="font-size: 12px; padding: 6px 12px;">
+      ✗ Con problemas ({{ total_not_ready }})
+    </button>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <button type="button" onclick="selectAllReady()" class="btn btn-ghost"
+            style="font-size: 12px; padding: 6px 12px;"
+            title="Tilda todos los productos con check rápido OK">
+      ☑ Seleccionar todos los listos
+    </button>
+  </div>
+</div>
+
 <form method="post" action="/publicar">
 <div class="card" style="padding: 0; overflow-x: auto;">
   <table class="data-table">
@@ -87,7 +115,7 @@
     </thead>
     <tbody>
       {% for r in rows %}
-      <tr>
+      <tr data-ready="{{ 'yes' if r.ready_quick else 'no' }}" class="filter-row">
         <td>
           <input type="checkbox" name="sku" value="{{ r.sku }}" class="row-check"
                  {% if not r.ready_quick %}disabled title="Faltan datos básicos"{% endif %} />
@@ -142,7 +170,7 @@
     </span>
     <div style="display: flex; gap: 8px; align-items: center;">
       <button type="submit" class="btn"
-              onclick="return confirm('¿Publicar los productos seleccionados en ML?\n\nSe crearán como borradores (estado pausado).')"
+              onclick="return confirm('¿Publicar los productos seleccionados en ML?\n\nSe crearán ACTIVOS (salen al aire al instante).')"
               {% if not ml_write_enabled %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}>
         ✚ Publicar seleccionados
       </button>
@@ -165,20 +193,74 @@
 {% endif %}
 
 <script>
-function toggleAll(master) {
-  const checks = document.querySelectorAll('.row-check:not([disabled])');
-  checks.forEach(c => { c.checked = master.checked; });
+// Filtro de filas por estado de pre-flight
+let currentFilter = 'ready';  // arranca filtrando los listos (caso de uso más común)
+
+function setFilter(name) {
+  currentFilter = name;
+  // Toggle clases de los botones (active vs ghost)
+  document.querySelectorAll('[id^="btn-filter-"]').forEach(b => {
+    b.classList.add('btn-ghost');
+    b.classList.remove('btn');
+  });
+  const active = document.getElementById('btn-filter-' + name);
+  if (active) {
+    active.classList.remove('btn-ghost');
+    active.classList.add('btn');
+  }
+  // Mostrar/ocultar filas
+  document.querySelectorAll('.filter-row').forEach(row => {
+    const ready = row.dataset.ready === 'yes';
+    let show = true;
+    if (name === 'ready') show = ready;
+    else if (name === 'notready') show = !ready;
+    row.style.display = show ? '' : 'none';
+  });
   updateCount();
 }
+
+function selectAllReady() {
+  // Tilda todos los checkboxes de filas listas (estén visibles o no)
+  let n = 0;
+  document.querySelectorAll('.filter-row').forEach(row => {
+    if (row.dataset.ready === 'yes') {
+      const cb = row.querySelector('.row-check');
+      if (cb && !cb.disabled) {
+        cb.checked = true;
+        n++;
+      }
+    }
+  });
+  updateCount();
+  // Asegurarse de que el filtro muestre los seleccionados
+  if (currentFilter === 'notready') setFilter('ready');
+}
+
+function toggleAll(master) {
+  // Solo afecta las filas VISIBLES (respeta el filtro)
+  document.querySelectorAll('.filter-row').forEach(row => {
+    if (row.style.display === 'none') return;
+    const cb = row.querySelector('.row-check');
+    if (cb && !cb.disabled) cb.checked = master.checked;
+  });
+  updateCount();
+}
+
 function updateCount() {
   const n = document.querySelectorAll('.row-check:checked').length;
   const el = document.getElementById('sel-count');
   if (el) el.textContent = n;
 }
+
 document.addEventListener('change', e => {
   if (e.target && e.target.classList && e.target.classList.contains('row-check')) {
     updateCount();
   }
+});
+
+// Aplicar filtro inicial al cargar la página
+document.addEventListener('DOMContentLoaded', () => {
+  setFilter('ready');
 });
 </script>
 {% endblock %}

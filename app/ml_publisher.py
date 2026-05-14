@@ -51,7 +51,7 @@ DEFAULT_LISTING_TYPE = os.environ.get("ML_LISTING_TYPE", "gold_special")
 DEFAULT_CONDITION = "new"
 DEFAULT_BUYING_MODE = "buy_it_now"
 DEFAULT_CURRENCY = "ARS"
-DEFAULT_INITIAL_STATUS = os.environ.get("ML_INITIAL_STATUS", "paused")
+DEFAULT_INITIAL_STATUS = os.environ.get("ML_INITIAL_STATUS", "active")
 
 # "Garantía del fabricante" en ML es value_id 2230280, pero también podés
 # mandarlo por value_name y ML lo resuelve. Usamos value_name por simplicidad.

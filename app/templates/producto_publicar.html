@@ -251,6 +251,8 @@
       <span class="val">
         {% if default_initial_status == "paused" %}
           Pausada (borrador, no sale al aire)
+        {% elif default_initial_status == "active" %}
+          <span style="color: #86efac;">Activa</span> (sale al aire)
         {% else %}
           {{ default_initial_status }}
         {% endif %}
