@@ -36,6 +36,7 @@ from . import (
     ml_publisher,
     notas_credito,
     precios,
+    publicaciones,
     remitos,
     stock,
     storage,
@@ -43,7 +44,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.37.1"
+APP_VERSION = "0.38.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -2100,6 +2101,164 @@ async def publicar_masivo_run(
 
 
 # ===============================================================
+# Publicaciones ML — estado, pausar/activar/cerrar, sync de status
+# ===============================================================
+
+@app.get("/publicaciones", response_class=HTMLResponse)
+def publicaciones_list(
+    request: Request,
+    q: str = "",
+    status: str = "",
+    categoria: str = "",
+    marca: str = "",
+    drift: str = "",
+    page: int = 1,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Lista de publicaciones ML con filtros + stats + acciones masivas."""
+    try:
+        rows, total, stats = publicaciones.list_publicaciones(
+            db,
+            search=q,
+            status=status,
+            categoria=categoria,
+            marca=marca,
+            drift=drift,
+            page=page,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error listando publicaciones: {type(e).__name__}: {e}",
+        }
+        rows, total, stats = [], 0, {}
+
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "publicaciones.html",
+        {
+            "user": user,
+            "active": "publicaciones",
+            "version": APP_VERSION,
+            "rows": rows,
+            "total": total,
+            "stats": stats,
+            "search": q,
+            "status_filter": status,
+            "categoria_filter": categoria,
+            "marca_filter": marca,
+            "drift_filter": drift,
+            "page": page,
+            "page_size": publicaciones.PAGE_SIZE,
+            "ml_write_enabled": ml_client.is_write_enabled(),
+            "categorias_disponibles": catalogo.list_categorias(db),
+            "marcas_disponibles": catalogo.list_marcas(db),
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/publicaciones/bulk/pausar")
+async def publicaciones_bulk_pausar(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    return await _publicaciones_bulk_status(request, db, "paused")
+
+
+@app.post("/publicaciones/bulk/activar")
+async def publicaciones_bulk_activar(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    return await _publicaciones_bulk_status(request, db, "active")
+
+
+@app.post("/publicaciones/bulk/sync")
+async def publicaciones_bulk_sync(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Refresca el status local desde lo que ML reporta (no cambia nada en ML)."""
+    form = await request.form()
+    skus = [s.strip() for s in form.getlist("skus") if (s or "").strip()]
+    if not skus:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": "No seleccionaste ninguna publicación.",
+        }
+        return RedirectResponse("/publicaciones", status_code=303)
+    try:
+        n_ok, n_fail, errores = publicaciones.refresh_status_from_ml(db, skus)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error sincronizando: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/publicaciones", status_code=303)
+
+    if n_ok and not n_fail:
+        flash_type, msg = "success", f"✓ {n_ok} publicación(es) sincronizada(s) desde ML."
+    elif n_ok:
+        flash_type, msg = "warning", (
+            f"{n_ok} sincronizada(s), {n_fail} fallaron. "
+            "Errores: " + " · ".join(errores[:3])
+        )
+    else:
+        flash_type, msg = "error", "Ningún sync OK. " + " · ".join(errores[:3])
+    request.session["flash"] = {"type": flash_type, "msg": msg}
+    return RedirectResponse("/publicaciones", status_code=303)
+
+
+async def _publicaciones_bulk_status(
+    request: Request,
+    db: DbSession,
+    new_status: str,
+):
+    """Helper común para bulk pausar/activar."""
+    form = await request.form()
+    skus = [s.strip() for s in form.getlist("skus") if (s or "").strip()]
+    if not skus:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": "No seleccionaste ninguna publicación.",
+        }
+        return RedirectResponse("/publicaciones", status_code=303)
+    try:
+        n_ok, n_fail, errores = publicaciones.bulk_change_status(db, skus, new_status)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/publicaciones", status_code=303)
+
+    accion = {"active": "activadas", "paused": "pausadas", "closed": "cerradas"}.get(new_status, "actualizadas")
+    if n_ok and not n_fail:
+        flash_type, msg = "success", f"✓ {n_ok} publicación(es) {accion}."
+    elif n_ok:
+        flash_type, msg = "warning", (
+            f"{n_ok} {accion}, {n_fail} fallaron. "
+            "Errores: " + " · ".join(errores[:3])
+        )
+    else:
+        flash_type, msg = "error", "Ninguna pudo cambiarse de status. " + " · ".join(errores[:3])
+    request.session["flash"] = {"type": flash_type, "msg": msg}
+    return RedirectResponse("/publicaciones", status_code=303)
+
+
+# ===============================================================
 # Precios — cambios masivos por fórmula + Excel solo precios
 # ===============================================================
 
@@ -3291,9 +3450,7 @@ _STUBS = [
     # "stock" ya no es stub — vive en app/stock.py + rutas dedicadas
     # "precios" ya no es stub — vive en app/precios.py + rutas dedicadas
     # "clientes" ya no es stub — vive en app/clientes.py + rutas dedicadas
-    ("publicaciones", "Publicaciones ML",
-     "Estado de los ítems publicados en Mercado Libre — pausar, "
-     "republicar y ver estadísticas de cada uno."),
+    # "publicaciones" ya no es stub — vive en app/publicaciones.py + rutas dedicadas
     ("mensajes", "Mensajes ML",
      "Preguntas de compradores en Mercado Libre y respuestas "
      "automáticas inteligentes."),
