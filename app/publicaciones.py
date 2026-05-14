@@ -210,6 +210,50 @@ def bulk_change_status(
     return n_ok, len(errores), errores
 
 
+def bulk_push_to_ml(
+    db: Session,
+    skus: list[str],
+    *,
+    push_stock: bool = True,
+    push_price: bool = True,
+) -> tuple[int, int, list[str]]:
+    """
+    Para cada SKU con vinculación ML, pushea stock + precio desde la BD local
+    a la publicación de ML. Útil cuando hay drift y la BD es la fuente de verdad.
+
+    Devuelve (n_ok, n_fail, errores).
+    """
+    if not ml_client.is_write_enabled():
+        return 0, len(skus), ["Write sync ML deshabilitado"]
+
+    from . import catalogo as catalogo_module  # lazy para evitar circular
+    n_ok = 0
+    errores: list[str] = []
+    for sku in skus:
+        sku = (sku or "").strip()
+        if not sku:
+            continue
+        try:
+            success, msg = catalogo_module.push_to_ml(
+                db, sku,
+                push_stock=push_stock,
+                push_price=push_price,
+                push_description=False,
+                push_attributes=False,
+                push_title=False,
+                push_pictures=False,
+            )
+        except Exception as e:
+            success = False
+            msg = f"{type(e).__name__}: {str(e)[:150]}"
+        if success:
+            n_ok += 1
+        else:
+            errores.append(f"{sku}: {msg[:150]}")
+        time.sleep(0.2)
+    return n_ok, len(errores), errores
+
+
 def refresh_status_from_ml(
     db: Session,
     skus: list[str],

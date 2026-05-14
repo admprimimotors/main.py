@@ -52,6 +52,7 @@
   .btn-pausar { background: rgba(245,158,11,.14); color: #fcd34d; border: 1px solid rgba(245,158,11,.40); }
   .btn-activar { background: rgba(34,197,94,.14); color: #86efac; border: 1px solid rgba(34,197,94,.40); }
   .btn-sync { background: rgba(59,130,246,.10); color: #93c5fd; border: 1px solid rgba(59,130,246,.30); }
+  .btn-push { background: rgba(168,85,247,.10); color: #c4b5fd; border: 1px solid rgba(168,85,247,.30); }
 
   .pagination { display: flex; justify-content: center; gap: 10px; margin-top: 22px; }
 </style>
@@ -243,8 +244,13 @@
     </span>
     <div class="toolbar-actions">
       <button type="submit" formaction="/publicaciones/bulk/sync" class="btn btn-sync"
-              onclick="return checkSelected('sincronizar status desde ML');">
-        ↻ Sync desde ML
+              onclick="return checkSelected('sincronizar status desde ML (trae lo que ML reporta hacia la BD local, no modifica ML)');">
+        ↓ Sync desde ML
+      </button>
+      <button type="submit" formaction="/publicaciones/bulk/push" class="btn btn-push"
+              onclick="return checkSelected('PUSHEAR stock+precio de la BD local hacia ML (úsalo cuando la BD tiene los valores correctos y ML está desactualizado)');"
+              {% if not ml_write_enabled %}disabled style="opacity: 0.5;"{% endif %}>
+        ↑ Push a ML
       </button>
       <button type="submit" formaction="/publicaciones/bulk/pausar" class="btn btn-pausar"
               onclick="return checkSelected('pausar las publicaciones seleccionadas');"

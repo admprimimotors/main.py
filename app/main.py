@@ -44,7 +44,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.38.0"
+APP_VERSION = "0.38.1"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -2178,6 +2178,49 @@ async def publicaciones_bulk_activar(
     db: DbSession = Depends(get_db),
 ):
     return await _publicaciones_bulk_status(request, db, "active")
+
+
+@app.post("/publicaciones/bulk/push")
+async def publicaciones_bulk_push(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Pushea stock + precio desde la BD local hacia ML para las publicaciones
+    seleccionadas. Caso de uso típico: hay drift entre BD y ML y la BD es
+    fuente de verdad.
+    """
+    form = await request.form()
+    skus = [s.strip() for s in form.getlist("skus") if (s or "").strip()]
+    if not skus:
+        request.session["flash"] = {
+            "type": "warning",
+            "msg": "No seleccionaste ninguna publicación.",
+        }
+        return RedirectResponse("/publicaciones", status_code=303)
+    try:
+        n_ok, n_fail, errores = publicaciones.bulk_push_to_ml(db, skus)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error inesperado: {type(e).__name__}: {e}",
+        }
+        return RedirectResponse("/publicaciones", status_code=303)
+
+    if n_ok and not n_fail:
+        flash_type, msg = "success", f"✓ {n_ok} publicación(es) pusheada(s) a ML."
+    elif n_ok:
+        flash_type, msg = "warning", (
+            f"{n_ok} pusheada(s), {n_fail} fallaron. "
+            "Errores: " + " · ".join(errores[:3])
+        )
+    else:
+        flash_type, msg = "error", "Ningún push OK. " + " · ".join(errores[:3])
+    request.session["flash"] = {"type": flash_type, "msg": msg}
+    return RedirectResponse("/publicaciones", status_code=303)
 
 
 @app.post("/publicaciones/bulk/sync")
