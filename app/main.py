@@ -31,7 +31,6 @@ from . import (
     auth,
     catalogo,
     clientes,
-    compat_scraper,
     database,
     ml_client,
     ml_publisher,
@@ -45,7 +44,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.39.1"
+APP_VERSION = "0.40.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -2302,164 +2301,6 @@ async def _publicaciones_bulk_status(
     return RedirectResponse("/publicaciones", status_code=303)
 
 
-# ===============================================================
-# Compatibilidades — auto-fill desde competidores de ML
-# ===============================================================
-
-@app.get("/compatibilidades", response_class=HTMLResponse)
-def compatibilidades_page(
-    request: Request,
-    user: str = Depends(auth.require_user),
-    db: DbSession = Depends(get_db),
-):
-    """
-    Página de auto-fill de compatibilidades.
-    Muestra:
-      - Stats: cuántos productos sin compats
-      - Botón "Procesar batch" (25 a la vez para no exceder timeout)
-      - Resultado del último batch (si hay)
-    """
-    eligible_count = compat_scraper.count_eligible(db)
-    flash = request.session.pop("flash", None)
-    last_results = request.session.pop("compat_last_results", None)
-    return templates.TemplateResponse(
-        request,
-        "compatibilidades.html",
-        {
-            "user": user,
-            "active": "compatibilidades",
-            "version": APP_VERSION,
-            "eligible_count": eligible_count,
-            "last_results": last_results,
-            "ml_write_enabled": ml_client.is_write_enabled(),
-            "flash": flash,
-        },
-    )
-
-
-@app.post("/compatibilidades/sync-existentes")
-def compatibilidades_sync_existentes(
-    request: Request,
-    batch_size: int = Form(default=50),
-    user: str = Depends(auth.require_user),
-    db: DbSession = Depends(get_db),
-):
-    """
-    PASO 1: para cada producto elegible (vinculado a ML, sin compats locales),
-    trae las compats que su PROPIA publicación ya tiene en ML y las guarda
-    local. Sin scrapear competidores.
-
-    Después de correr esto, el eligible_count refleja los productos que
-    realmente no tienen compats en NINGÚN lado.
-    """
-    batch_size = max(1, min(int(batch_size), 100))
-    try:
-        summary = compat_scraper.sync_own_compats_from_ml(db, batch_size=batch_size)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        request.session["flash"] = {
-            "type": "error",
-            "msg": f"Error inesperado: {type(e).__name__}: {e}",
-        }
-        return RedirectResponse("/compatibilidades", status_code=303)
-
-    n_proc = summary["processed"]
-    n_sync = summary["synced"]
-    n_without = summary["without_compats"]
-    if n_proc == 0:
-        flash_type, msg = "success", "✓ No quedan productos elegibles."
-    elif n_sync:
-        flash_type, msg = "success", (
-            f"✓ Sync de {n_proc} producto(s) procesados · "
-            f"{n_sync} ya tenían compats en ML (bajadas a local) · "
-            f"{n_without} sin compats en ML (necesitan scraper)."
-        )
-    else:
-        flash_type, msg = "warning", (
-            f"{n_proc} procesados · ninguno tenía compats en ML · "
-            f"se necesita el scraper de competidores."
-        )
-    if summary["errors"]:
-        msg += f" Errores: {' · '.join(summary['errors'][:3])}"
-
-    request.session["flash"] = {"type": flash_type, "msg": msg}
-    return RedirectResponse("/compatibilidades", status_code=303)
-
-
-@app.post("/compatibilidades/run")
-def compatibilidades_run(
-    request: Request,
-    batch_size: int = Form(default=25),
-    min_votes: int = Form(default=2),
-    max_compats: int = Form(default=10),
-    user: str = Depends(auth.require_user),
-    db: DbSession = Depends(get_db),
-):
-    """
-    Procesa un batch de N productos elegibles. Cada uno: scraper + push a ML.
-    El batch máximo es 25 para mantenerse dentro del timeout de Render (~100s).
-    """
-    # Cap defensivo para no romper Render
-    batch_size = max(1, min(int(batch_size), 50))
-    min_votes = max(1, int(min_votes))
-    max_compats = max(1, min(int(max_compats), 20))
-
-    if not ml_client.is_write_enabled():
-        request.session["flash"] = {
-            "type": "warning",
-            "msg": "Write sync ML deshabilitado: el scraper va a guardar local pero NO va a pushear a ML. Seteá ML_SYNC_WRITE_ENABLED=true en Render.",
-        }
-
-    try:
-        summary = compat_scraper.process_batch(
-            db,
-            batch_size=batch_size,
-            min_votes=min_votes,
-            max_compats=max_compats,
-        )
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        request.session["flash"] = {
-            "type": "error",
-            "msg": f"Error inesperado: {type(e).__name__}: {e}",
-        }
-        return RedirectResponse("/compatibilidades", status_code=303)
-
-    n_proc = summary["processed"]
-    n_ok = summary["ok"]
-    n_fail = summary["fail"]
-    if n_proc == 0:
-        flash_type, msg = "success", "✓ No quedan productos sin compatibilidades."
-    elif n_ok and not n_fail:
-        flash_type, msg = "success", (
-            f"✓ {n_ok} producto(s) procesado(s) — compats agregadas local + pusheadas a ML."
-        )
-    elif n_ok:
-        flash_type, msg = "warning", (
-            f"{n_ok} OK, {n_fail} con problemas (ver detalle abajo)."
-        )
-    else:
-        flash_type, msg = "warning", (
-            f"Ninguno se pudo completar — {n_fail} problemas (ver detalle abajo)."
-        )
-
-    request.session["flash"] = {"type": flash_type, "msg": msg}
-    # Truncamos antes de meterlo en la cookie de sesión (~4KB cap):
-    # solo guardamos lo mínimo para mostrar en la tabla del resultado.
-    short_results = [
-        {
-            "sku": r["sku"],
-            "ok": r["ok"],
-            "n_local": r["n_local_added"],
-            "n_ml": r["n_pushed_ml"],
-            "err": (r["error"] or "")[:100],
-        }
-        for r in summary["results"]
-    ]
-    request.session["compat_last_results"] = short_results
-    return RedirectResponse("/compatibilidades", status_code=303)
 
 
 # ===============================================================
