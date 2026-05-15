@@ -76,20 +76,48 @@
 </div>
 
 <div class="how-it-works">
-  <strong>Cómo funciona:</strong>
+  <strong>Flujo recomendado (2 pasos):</strong>
   <ol>
-    <li>Para cada producto buscamos en ML por <code>numero_de_pieza</code> de la ficha y por título.</li>
-    <li>De los top {{ 10 }} resultados, traemos las compatibilidades de cada uno.</li>
-    <li>Aglomeramos por vehículo (mismo ID en el catálogo ML = mismo vehículo).</li>
-    <li>Nos quedamos con los que tienen al menos <em>min votos</em> apariciones.</li>
-    <li>Guardamos local + pusheamos a ML.</li>
+    <li>
+      <strong>Paso 1 — Sync existentes desde ML:</strong> trae a la base local
+      las compats que tus propias publicaciones <strong>ya tienen en ML</strong>.
+      Esto descarta del scraping a los productos que ya estaban OK pero el
+      cache local no lo reflejaba. Súper rápido (1 GET por producto).
+    </li>
+    <li>
+      <strong>Paso 2 — Scraper desde competidores:</strong> para los que
+      <em>realmente</em> no tienen compats en ningún lado, busca en
+      publicaciones competidoras de ML que vendan el mismo producto,
+      aglomera por frecuencia y aplica las top N. Más lento (5-10s por SKU).
+    </li>
   </ol>
-  Cada producto tarda 5-10 segundos por la cantidad de llamadas a ML. Por eso
-  procesamos en <strong>batches</strong> para no romper el timeout de Render.
 </div>
 
+<!-- PASO 1 -->
+<form method="post" action="/compatibilidades/sync-existentes" class="card" style="margin-bottom: 14px;">
+  <div class="card-title">Paso 1 · Sincronizar compats existentes desde ML</div>
+  <p style="font-size: 12px; color: var(--muted); margin: 4px 0 12px;">
+    Recomendado hacer esto primero. Cada producto = 1 sola llamada a ML
+    (rápido). Después, el contador de "sin compats" arriba va a bajar a los
+    que realmente necesitan el scraper.
+  </p>
+  <div class="form-row">
+    <div class="form-field">
+      <label for="sync_batch_size">Productos por batch</label>
+      <input type="number" name="batch_size" id="sync_batch_size" value="50" min="1" max="100" />
+      <span class="help">Más rápido que el scraper, podés subirlo</span>
+    </div>
+    <button type="submit" class="btn btn-ghost"
+            {% if eligible_count == 0 %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}
+            onclick="return confirm('¿Sincronizar compats existentes desde ML?\\nProcesa hasta {{ '{batch_size}' }} productos.');">
+      ↓ Sync existentes desde ML
+    </button>
+  </div>
+</form>
+
+<!-- PASO 2 -->
 <form method="post" action="/compatibilidades/run" class="card">
-  <div class="card-title">Procesar batch</div>
+  <div class="card-title">Paso 2 · Scraper desde competidores</div>
   <div class="form-row">
     <div class="form-field">
       <label for="batch_size">Productos por batch</label>

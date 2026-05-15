@@ -328,6 +328,73 @@ def process_one_producto(
     return result
 
 
+def sync_own_compats_from_ml(
+    db: Session,
+    batch_size: int = 50,
+) -> dict:
+    """
+    Para los productos elegibles (sin compats locales), trae las compats que
+    ya tiene su PROPIA publicación en ML y las guarda local. No scrapea
+    competidores — solo sincroniza lo que ML ya reporta.
+
+    Se usa antes del scraper de competidores para evitar procesar productos
+    que ya tienen compats cargadas en ML pero el cache local no lo refleja.
+
+    Devuelve:
+      {processed: N, synced: N (productos que se trajeron compats),
+       without_compats: N (productos que ML no tiene compats),
+       errors: [...]}
+    """
+    productos = list_eligible_skus(db, limit=batch_size)
+    if not productos:
+        return {"processed": 0, "synced": 0, "without_compats": 0, "errors": []}
+
+    vehiculo_cache: dict = {}
+    n_synced = 0
+    n_without = 0
+    errors: list[str] = []
+
+    for prod in productos:
+        try:
+            compats = ml_client.get_item_compatibilities(db, prod.ml_item_id)
+        except Exception as e:
+            errors.append(f"{prod.sku}: {type(e).__name__}: {str(e)[:120]}")
+            time.sleep(SLEEP_BETWEEN_CALLS)
+            continue
+        time.sleep(SLEEP_BETWEEN_CALLS)
+        if not compats:
+            n_without += 1
+            continue
+
+        # Cada compat existente cuenta como 1 voto (es del propio item, sin diff)
+        aggregated = [
+            {"vehicle_id": c.get("id"), "votes": 1, "raw": c}
+            for c in compats if c.get("id")
+        ]
+        try:
+            n_added, _ = apply_compats_to_producto(
+                db, prod, aggregated,
+                min_votes=1, max_compats=50,
+                vehiculo_cache=vehiculo_cache,
+            )
+            if n_added > 0:
+                n_synced += 1
+            db.commit()
+        except Exception as e:
+            errors.append(f"{prod.sku}: aplicar local falló: {type(e).__name__}: {str(e)[:120]}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    return {
+        "processed": len(productos),
+        "synced": n_synced,
+        "without_compats": n_without,
+        "errors": errors,
+    }
+
+
 def list_eligible_skus(db: Session, limit: int = 50) -> list[Producto]:
     """
     Productos activos vinculados a ML que NO tienen compatibilidades locales.
