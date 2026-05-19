@@ -1464,6 +1464,77 @@ def bulk_edit_skus(
     return aplicados, errores
 
 
+def count_sync_pendientes(db: Session) -> int:
+    """
+    Cantidad de productos vinculados a ML que NUNCA fueron sincronizados
+    (`ml_item_id` no nulo y `ml_last_synced_at` IS NULL). El loop frontend
+    los procesa hasta que llegue a 0.
+    """
+    q = (
+        select(sql_func.count(Producto.id))
+        .where(Producto.ml_item_id.is_not(None))
+        .where(Producto.ml_last_synced_at.is_(None))
+    )
+    return db.execute(q).scalar() or 0
+
+
+def bulk_sync_never_synced(db: Session, limit: int = 25) -> dict:
+    """
+    Sincroniza hasta `limit` productos vinculados a ML que aún NO fueron
+    sincronizados (ml_last_synced_at IS NULL). Igual que `bulk_sync_oldest`
+    en lógica, pero filtra solo los never-synced — el loop frontend termina
+    cuando `remaining == 0`.
+
+    Devuelve dict en formato:
+      {
+        "processed": int,
+        "remaining": int,
+        "done": bool,
+        "errors": list[str],
+        "skus_done": list[str],
+      }
+    """
+    from . import ml_client
+    if not ml_client.is_configured():
+        return {
+            "processed": 0,
+            "remaining": 0,
+            "done": True,
+            "errors": ["ML no está configurado (faltan env vars ML_*)"],
+            "skus_done": [],
+        }
+
+    q = (
+        select(Producto.sku)
+        .where(Producto.ml_item_id.is_not(None))
+        .where(Producto.ml_last_synced_at.is_(None))
+        .limit(limit)
+    )
+    skus = [s for (s,) in db.execute(q).all()]
+
+    ok_skus: list[str] = []
+    errors: list[str] = []
+    for sku in skus:
+        try:
+            success, msg = sync_producto_from_ml(db, sku, hidratar=False)
+        except Exception as e:
+            success = False
+            msg = f"{type(e).__name__}: {e}"
+        if success:
+            ok_skus.append(sku)
+        else:
+            errors.append(f"{sku}: {msg}")
+
+    remaining = count_sync_pendientes(db)
+    return {
+        "processed": len(ok_skus),
+        "remaining": remaining,
+        "done": remaining == 0,
+        "errors": errors,
+        "skus_done": ok_skus,
+    }
+
+
 def bulk_sync_oldest(db: Session, limit: int = 50) -> tuple[int, int, list[str]]:
     """
     Sincroniza los N productos vinculados con sync más antiguo (o nunca sync'd).

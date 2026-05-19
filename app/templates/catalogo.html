@@ -308,13 +308,36 @@
 
   <div style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-soft);">
     <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-      <form method="post" action="/catalogo/ml-link/sync-batch" style="margin: 0;">
-        <button type="submit" class="btn">↻ Sync 50 más antiguos desde ML</button>
-      </form>
+      <button type="button" class="btn" id="btn-auto-sync"
+              {% if sync_pendientes == 0 %}disabled{% endif %}>
+        ↻ Sincronizar todos los pendientes desde ML
+        <span id="sync-pendientes-count" style="margin-left: 6px; opacity: 0.85;">
+          ({{ sync_pendientes }})
+        </span>
+      </button>
       <span style="font-size: 12px; color: var(--muted);">
-        Trae precio/stock/status reales de ML (sin descargar fotos ni hidratar).
-        Procesa los 50 con sync más antiguo. Repetí hasta que todo esté al día.
+        Loop automático: trae precio/stock/status de TODOS los productos vinculados a ML
+        que nunca fueron sincronizados. Procesa de a 25 hasta terminar — puede tardar
+        varios minutos. No cierres la pestaña hasta que termine.
       </span>
+    </div>
+
+    {# Banner de progreso del sync loop #}
+    <div id="auto-sync-banner" style="display: none; margin-top: 14px; padding: 14px 16px;
+         border-radius: 8px; border: 1px solid rgba(59,130,246,.40);
+         background: rgba(59,130,246,.10); font-size: 13px; line-height: 1.6;">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 14px; height: 14px; border-radius: 50%;
+                    border: 2px solid #93c5fd; border-top-color: transparent;
+                    animation: spin 0.8s linear infinite;" id="sync-spinner"></div>
+        <strong id="auto-sync-status" style="color: #93c5fd;">Iniciando…</strong>
+      </div>
+      <div id="auto-sync-progress-bar"
+           style="margin-top: 10px; background: rgba(0,0,0,.3); height: 6px; border-radius: 3px; overflow: hidden;">
+        <div id="auto-sync-progress-fill"
+             style="height: 100%; width: 0%; background: #93c5fd; transition: width .3s;"></div>
+      </div>
+      <div id="auto-sync-detail" style="margin-top: 8px; color: var(--muted); font-size: 12px;"></div>
     </div>
   </div>
 
@@ -413,6 +436,83 @@
 
         if (data.done || data.processed === 0) {
           status.textContent = `✓ Completado: ${totalProcesados} hidratados${totalErrores ? `, ${totalErrores} con error` : ''}`;
+          status.style.color = totalErrores ? '#fcd34d' : '#86efac';
+          spinner.style.display = 'none';
+          fill.style.width = '100%';
+          fill.style.background = totalErrores ? '#fcd34d' : '#86efac';
+          if (erroresAcum.length) {
+            detail.textContent = 'Errores (primeros 5): ' + erroresAcum.slice(0, 5).join(' · ');
+          } else {
+            detail.textContent = 'Recargando página en 3 segundos…';
+          }
+          setTimeout(() => location.reload(), 3000);
+          break;
+        }
+      } catch (e) {
+        status.textContent = `❌ Error de red: ${e.message} — abortando`;
+        status.style.color = '#fca5a5';
+        spinner.style.display = 'none';
+        break;
+      }
+    }
+  });
+})();
+
+// =================================================================
+// Loop de sync masivo desde ML (paralelo al de hidratar)
+// =================================================================
+(function() {
+  const btn = document.getElementById('btn-auto-sync');
+  const banner = document.getElementById('auto-sync-banner');
+  const status = document.getElementById('auto-sync-status');
+  const detail = document.getElementById('auto-sync-detail');
+  const fill = document.getElementById('auto-sync-progress-fill');
+  const spinner = document.getElementById('sync-spinner');
+  const totalInicial = {{ sync_pendientes }};
+
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    if (!confirm(`Iniciar sync masivo de ${totalInicial} producto${totalInicial === 1 ? '' : 's'} vinculado${totalInicial === 1 ? '' : 's'} sin sincronizar?\n\nProcesa de a 25 por iteración. Puede tardar varios minutos. No cierres la pestaña.`)) {
+      return;
+    }
+
+    btn.disabled = true;
+    banner.style.display = 'block';
+    status.textContent = 'Iniciando…';
+
+    let totalProcesados = 0;
+    let totalErrores = 0;
+    const erroresAcum = [];
+    let safetyCounter = 0;
+    const MAX_ITERS = 1000;  // 25 × 1000 = 25000, suficiente para cualquier catálogo
+
+    while (safetyCounter < MAX_ITERS) {
+      safetyCounter++;
+      try {
+        const resp = await fetch('/catalogo/ml-link/sync-batch/loop', {method: 'POST'});
+        if (!resp.ok) {
+          status.textContent = `❌ Error HTTP ${resp.status} — abortando`;
+          status.style.color = '#fca5a5';
+          spinner.style.display = 'none';
+          break;
+        }
+        const data = await resp.json();
+        totalProcesados += data.processed;
+        totalErrores += (data.errors || []).length;
+        if (data.errors && data.errors.length) erroresAcum.push(...data.errors);
+
+        const restantes = data.remaining;
+        const totalEstimado = totalProcesados + restantes;
+        const pct = totalEstimado > 0 ? (totalProcesados / totalEstimado * 100) : 100;
+        fill.style.width = pct.toFixed(1) + '%';
+        status.textContent = `Procesados ${totalProcesados} · Restan ${restantes}`;
+        if (data.skus_done && data.skus_done.length) {
+          detail.textContent = `Última tanda: ${data.skus_done.slice(0, 10).join(', ')}${data.skus_done.length > 10 ? '…' : ''}`;
+        }
+
+        if (data.done || data.processed === 0) {
+          status.textContent = `✓ Completado: ${totalProcesados} sincronizado${totalProcesados === 1 ? '' : 's'}${totalErrores ? `, ${totalErrores} con error` : ''}`;
           status.style.color = totalErrores ? '#fcd34d' : '#86efac';
           spinner.style.display = 'none';
           fill.style.width = '100%';

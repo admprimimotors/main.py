@@ -44,7 +44,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.40.0"
+APP_VERSION = "0.41.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -219,6 +219,7 @@ def catalogo_view(
     categorias_disponibles = catalogo.list_categorias(db)
     marcas_disponibles = catalogo.list_marcas(db)
     placeholders_pendientes = catalogo.count_placeholders_pendientes(db)
+    sync_pendientes = catalogo.count_sync_pendientes(db)
     flash = request.session.pop("flash", None)
     # Guardar la URL relativa (path+query) para que el detalle del producto y
     # los endpoints bulk tengan adónde volver. Path+query (no la URL absoluta)
@@ -247,6 +248,7 @@ def catalogo_view(
             "categorias_disponibles": categorias_disponibles,
             "marcas_disponibles": marcas_disponibles,
             "placeholders_pendientes": placeholders_pendientes,
+            "sync_pendientes": sync_pendientes,
         },
     )
 
@@ -866,6 +868,40 @@ def catalogo_bulk_push(
 
     request.session["flash"] = {"type": flash_type, "msg": msg}
     return RedirectResponse(_back_to_catalogo(request), status_code=303)
+
+
+@app.post("/catalogo/ml-link/sync-batch/loop")
+def catalogo_ml_sync_batch_loop(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Endpoint JSON que el frontend llama en loop para sincronizar TODOS los
+    productos vinculados a ML que nunca fueron sincronizados. Procesa hasta
+    SYNC_LOOP_CAP por request — el JS sigue llamando hasta `done=true`.
+    """
+    SYNC_LOOP_CAP = 25  # ~30-50s por iteración, seguro para Render timeout
+    try:
+        result = catalogo.bulk_sync_never_synced(db, limit=SYNC_LOOP_CAP)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return JSONResponse(
+            {
+                "processed": 0,
+                "remaining": 0,
+                "done": True,
+                "errors": [f"{type(e).__name__}: {e}"],
+                "skus_done": [],
+            },
+            status_code=500,
+        )
+    return JSONResponse(result)
 
 
 @app.post("/catalogo/ml-link/sync-batch")
