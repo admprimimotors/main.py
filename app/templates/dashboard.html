@@ -3,50 +3,208 @@
 {% block page_title %}Inicio{% endblock %}
 
 {% block content %}
+<style>
+  .sales-widget {
+    background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: 10px; padding: 18px 20px; margin-bottom: 18px;
+  }
+  .sales-widget .head {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 10px; margin-bottom: 14px;
+  }
+  .sales-widget .head h3 { margin: 0; font-size: 16px; }
+  .sales-widget .head .sync-info { font-size: 11px; color: var(--muted); }
+
+  .periods-tabs { display: flex; gap: 6px; }
+  .periods-tabs button {
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--muted-strong); border-radius: 6px;
+    padding: 5px 12px; font-size: 12px; cursor: pointer;
+    transition: all .12s;
+  }
+  .periods-tabs button.active {
+    background: var(--brand); border-color: var(--brand); color: white;
+  }
+
+  .stats-row {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .stat-item {
+    background: var(--panel-2); border: 1px solid var(--border-soft);
+    border-radius: 8px; padding: 14px;
+  }
+  .stat-item .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-item .value { font-size: 26px; font-weight: 600; color: var(--text); margin-top: 4px; line-height: 1; }
+  .stat-item .delta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .stat-item.ml .value { color: #fcd34d; }
+  .stat-item.remito .value { color: #93c5fd; }
+  .stat-item.total .value { color: #86efac; }
+
+  .top-skus { margin-top: 14px; }
+  .top-skus .title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .top-skus table { width: 100%; font-size: 13px; border-collapse: collapse; }
+  .top-skus td { padding: 7px 0; border-bottom: 1px solid var(--border-soft); }
+  .top-skus tr:last-child td { border-bottom: none; }
+  .top-skus .qty-cell { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: #86efac; }
+  .top-skus .fuente-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; margin-left: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .fuente-badge.ML { background: rgba(245,158,11,.14); color: #fcd34d; }
+  .fuente-badge.Remito { background: rgba(59,130,246,.14); color: #93c5fd; }
+
+  .btn-sync {
+    background: rgba(59,130,246,.10); color: #93c5fd;
+    border: 1px solid rgba(59,130,246,.30); border-radius: 6px;
+    padding: 5px 12px; font-size: 12px; cursor: pointer;
+  }
+  .btn-sync:hover { background: rgba(59,130,246,.20); }
+  .btn-sync:disabled { opacity: 0.5; cursor: not-allowed; }
+</style>
+
 <div class="page-intro">
   <h2>Hola, {{ user }} 👋</h2>
-  <p>Resumen del estado actual del sistema.</p>
+  <p>Movimientos de stock por ventas en tiempo real.</p>
 </div>
 
-<div class="grid stats">
-  <div class="card stat">
-    <h3>Publicaciones activas</h3>
-    <div class="value">—</div>
-    <div class="delta">se cargará al sincronizar con ML</div>
-  </div>
-  <div class="card stat">
-    <h3>SKUs en stock</h3>
-    <div class="value">—</div>
-    <div class="delta">subí el Excel master para ver datos</div>
-  </div>
-  <div class="card stat">
-    <h3>Stock bajo</h3>
-    <div class="value">—</div>
-    <div class="delta">items con menos de 3 unidades</div>
-  </div>
-  <div class="card stat">
-    <h3>Preguntas ML pendientes</h3>
-    <div class="value">—</div>
-    <div class="delta">no respondidas hace +1h</div>
-  </div>
-</div>
-
-<div class="grid split">
-  <div class="card">
-    <div class="card-title">Actividad reciente</div>
-    <div style="color: var(--muted); padding: 28px 0; text-align: center; font-size: 13px;">
-      Sin actividad todavía.<br />
-      Cuando subas catálogo o publiques en ML va a aparecer acá.
+<!-- Widget de ventas / stock movido -->
+<div class="sales-widget" id="sales-widget">
+  <div class="head">
+    <div>
+      <h3>Movimiento de stock por ventas</h3>
+      <div class="sync-info" id="sync-info">
+        {% if last_sync %}
+          Última sync: {{ last_sync.strftime('%d/%m/%Y %H:%M') }}
+        {% elif not ml_configured %}
+          ⚠ ML no configurado — solo se mostrarán remitos.
+        {% else %}
+          Sin syncs todavía
+        {% endif %}
+      </div>
+    </div>
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <div class="periods-tabs">
+        <button type="button" data-period="24h" class="active">24 h</button>
+        <button type="button" data-period="7d">7 días</button>
+        <button type="button" data-period="30d">30 días</button>
+      </div>
+      <button type="button" class="btn-sync" id="btn-sync-now"
+              {% if not ml_configured %}disabled title="ML no configurado"{% endif %}>
+        ↻ Sync ventas
+      </button>
     </div>
   </div>
-  <div class="card">
-    <div class="card-title">Próximos pasos</div>
-    <ul style="padding-left: 20px; margin: 0; color: var(--muted-strong); line-height: 1.9; font-size: 13px;">
-      <li>Definir modelos de DB (productos, stock)</li>
-      <li>Subir el primer Excel master</li>
-      <li>Conectar sync con Mercado Libre</li>
-      <li>Configurar respuestas automáticas</li>
-    </ul>
+
+  {% set periods = [
+    ('24h', stats_24h, '24 horas'),
+    ('7d', stats_7d, '7 días'),
+    ('30d', stats_30d, '30 días'),
+  ] %}
+  {% for pid, stats, label in periods %}
+  <div class="period-content" data-period="{{ pid }}" {% if pid != '24h' %}style="display: none;"{% endif %}>
+    {% if stats %}
+    {% set tot_ventas = (stats.ml.n_ventas or 0) + (stats.remitos.n_ventas or 0) %}
+    {% set tot_stock = (stats.ml.stock_movido or 0) + (stats.remitos.stock_movido or 0) %}
+    {% set tot_monto = (stats.ml.monto_total|float) + (stats.remitos.monto_total|float) %}
+    <div class="stats-row">
+      <div class="stat-item total">
+        <div class="label">Total ventas ({{ label }})</div>
+        <div class="value">{{ tot_ventas }}</div>
+        <div class="delta">{{ tot_stock }} unidades movidas · ${{ "{:,.0f}".format(tot_monto) }}</div>
+      </div>
+      <div class="stat-item ml">
+        <div class="label">Mercado Libre</div>
+        <div class="value">{{ stats.ml.n_ventas or 0 }}</div>
+        <div class="delta">{{ stats.ml.stock_movido or 0 }} u · ${{ "{:,.0f}".format(stats.ml.monto_total|float) }}</div>
+      </div>
+      <div class="stat-item remito">
+        <div class="label">Remitos</div>
+        <div class="value">{{ stats.remitos.n_ventas or 0 }}</div>
+        <div class="delta">{{ stats.remitos.stock_movido or 0 }} u · ${{ "{:,.0f}".format(stats.remitos.monto_total|float) }}</div>
+      </div>
+    </div>
+
+    {% if stats.top_skus %}
+    <div class="top-skus">
+      <div class="title">Top productos vendidos · {{ label }}</div>
+      <table>
+        {% for s in stats.top_skus %}
+        <tr>
+          <td>
+            <a href="/catalogo/{{ s.sku|urlencode }}" style="color: var(--brand-hover); font-family: ui-monospace, monospace; font-size: 12px;">{{ s.sku }}</a>
+            <span style="color: var(--muted-strong); margin-left: 8px;">{{ s.titulo|truncate(80) }}</span>
+            {% for f in s.fuentes %}<span class="fuente-badge {{ f }}">{{ f }}</span>{% endfor %}
+          </td>
+          <td class="qty-cell">{{ s.qty }} u</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+    {% else %}
+    <div style="color: var(--muted); padding: 24px; text-align: center; font-size: 13px;">
+      No hay data para este período.
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft); text-align: center;">
+    <a href="/movimientos-stock" style="color: var(--brand-hover); font-size: 12px; text-decoration: none;">
+      → Ver detalle completo de movimientos
+    </a>
   </div>
 </div>
+
+<div class="card">
+  <div class="card-title">Próximos pasos</div>
+  <ul style="padding-left: 20px; margin: 0; color: var(--muted-strong); line-height: 1.9; font-size: 13px;">
+    <li>Revisá <a href="/publicaciones" style="color: var(--brand-hover);">Publicaciones ML</a> para ver el estado de todo lo publicado</li>
+    <li>Subí el Excel master desde <a href="/catalogo" style="color: var(--brand-hover);">Catálogo</a> para actualizar precios y stock en bulk</li>
+    <li>Emití remitos desde <a href="/remitos" style="color: var(--brand-hover);">Remitos</a> para ventas presenciales</li>
+  </ul>
+</div>
+
+<script>
+// Tabs de período
+document.querySelectorAll('.periods-tabs button').forEach(b => {
+  b.addEventListener('click', () => {
+    const period = b.dataset.period;
+    document.querySelectorAll('.periods-tabs button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    document.querySelectorAll('.period-content').forEach(div => {
+      div.style.display = (div.dataset.period === period) ? '' : 'none';
+    });
+  });
+});
+
+// Botón sync ventas manual
+const btnSync = document.getElementById('btn-sync-now');
+const syncInfo = document.getElementById('sync-info');
+if (btnSync) {
+  btnSync.addEventListener('click', async () => {
+    btnSync.disabled = true;
+    const origText = btnSync.textContent;
+    btnSync.textContent = '⟳ Sincronizando…';
+    try {
+      const resp = await fetch('/api/ml/orders/sync', {method: 'POST'});
+      const data = await resp.json();
+      if (data.ok) {
+        const s = data.summary;
+        syncInfo.textContent = `✓ Sync: ${s.created} órdenes nuevas, ${s.updated} actualizadas, ${s.stock_applied} u descontadas, ${s.stock_reverted} u revertidas. Recargando…`;
+        syncInfo.style.color = '#86efac';
+        setTimeout(() => location.reload(), 1500);
+      } else {
+        syncInfo.textContent = `❌ Error: ${data.error}`;
+        syncInfo.style.color = '#fca5a5';
+        btnSync.disabled = false;
+        btnSync.textContent = origText;
+      }
+    } catch (e) {
+      syncInfo.textContent = `❌ ${e.message}`;
+      syncInfo.style.color = '#fca5a5';
+      btnSync.disabled = false;
+      btnSync.textContent = origText;
+    }
+  });
+}
+</script>
 {% endblock %}

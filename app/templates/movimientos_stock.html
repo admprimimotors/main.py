@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Movimientos de stock · Primi Motors{% endblock %}
+{% block page_title %}Movimientos de stock{% endblock %}
+
+{% block content %}
+<style>
+  .alert { padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 18px; border: 1px solid; }
+  .alert-error { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.40); color: #fca5a5; }
+
+  .filter-form { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+  .filter-form input, .filter-form select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 9px 13px; font-size: 13px;
+  }
+  .filter-form input[type=search] { flex: 1 1 220px; }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table thead th { text-align: left; padding: 10px 14px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.4px; font-size: 11px; border-bottom: 1px solid var(--border-soft); background: var(--panel-2); }
+  .data-table tbody td { padding: 9px 14px; border-bottom: 1px solid var(--border-soft); color: var(--muted-strong); }
+  .data-table tbody tr:last-child td { border-bottom: none; }
+  .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .fuente-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .fuente-badge.ML { background: rgba(245,158,11,.14); color: #fcd34d; }
+  .fuente-badge.Remito { background: rgba(59,130,246,.14); color: #93c5fd; }
+
+  .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .status-paid, .status-confirmed, .status-emitido { background: rgba(34,197,94,.14); color: #86efac; }
+  .status-cancelled, .status-invalid, .status-anulado { background: rgba(239,68,68,.10); color: #fca5a5; }
+  .status-refunded { background: rgba(245,158,11,.14); color: #fcd34d; }
+
+  .pagination { display: flex; justify-content: center; gap: 10px; margin-top: 22px; }
+</style>
+
+{% if flash %}<div class="alert alert-{{ flash.type }}">{{ flash.msg }}</div>{% endif %}
+
+<div class="page-intro">
+  <h2>Movimientos de stock por ventas</h2>
+  <p>Cronología combinada de ventas en ML + remitos. {{ total }} movimiento(s) en los últimos {{ days }} día(s).</p>
+</div>
+
+<form method="get" action="/movimientos-stock" class="filter-form">
+  <input type="search" name="sku" value="{{ sku }}" placeholder="Filtrar por SKU…" />
+  <select name="fuente">
+    <option value="" {% if not fuente %}selected{% endif %}>Fuente: todas</option>
+    <option value="ml" {% if fuente == 'ml' %}selected{% endif %}>Solo ML</option>
+    <option value="remito" {% if fuente == 'remito' %}selected{% endif %}>Solo Remitos</option>
+  </select>
+  <select name="days">
+    <option value="1"   {% if days == 1   %}selected{% endif %}>24 horas</option>
+    <option value="7"   {% if days == 7   %}selected{% endif %}>7 días</option>
+    <option value="30"  {% if days == 30  %}selected{% endif %}>30 días</option>
+    <option value="90"  {% if days == 90  %}selected{% endif %}>90 días</option>
+    <option value="365" {% if days == 365 %}selected{% endif %}>1 año</option>
+  </select>
+  <button type="submit" class="btn">Filtrar</button>
+  {% if sku or fuente or days != 30 %}<a href="/movimientos-stock" class="btn btn-ghost">Limpiar</a>{% endif %}
+</form>
+
+{% if items %}
+<div class="card" style="padding: 0; overflow-x: auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th>Fuente</th>
+        <th>SKU / Producto</th>
+        <th class="num">Cantidad</th>
+        <th class="num">Stock aplicado</th>
+        <th class="num">Monto</th>
+        <th>Estado</th>
+        <th>Comprador</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td style="white-space: nowrap;">
+          {% if it.fecha %}{{ it.fecha.strftime('%d/%m/%Y %H:%M') }}{% else %}—{% endif %}
+        </td>
+        <td><span class="fuente-badge {{ it.fuente }}">{{ it.fuente }}</span></td>
+        <td>
+          {% if it.sku %}
+          <a href="/catalogo/{{ it.sku|urlencode }}" style="color: var(--brand-hover); font-family: ui-monospace, monospace; font-size: 12px;">{{ it.sku }}</a>
+          {% else %}<span style="color: var(--muted);">—</span>{% endif %}
+          <div style="color: var(--text); margin-top: 2px;">{{ it.titulo|truncate(70) if it.titulo else '' }}</div>
+        </td>
+        <td class="num"><strong>{{ it.cantidad }}</strong></td>
+        <td class="num">
+          {% if it.stock_aplicado %}
+            <span style="color: #86efac;">−{{ it.stock_aplicado }}</span>
+          {% else %}
+            <span style="color: var(--muted);">0</span>
+          {% endif %}
+        </td>
+        <td class="num">{% if it.monto %}${{ "{:,.0f}".format(it.monto) }}{% else %}—{% endif %}</td>
+        <td><span class="status-badge status-{{ it.status }}">{{ it.status }}</span></td>
+        <td style="font-size: 12px; color: var(--muted-strong);">{{ it.buyer or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% set total_pages = ((total + 99) // 100) if total > 0 else 1 %}
+{% if total_pages > 1 %}
+{% set filter_qs = 'days=' ~ days ~ '&fuente=' ~ (fuente|urlencode) ~ '&sku=' ~ (sku|urlencode) %}
+<div class="pagination">
+  {% if page > 1 %}<a href="?{{ filter_qs }}&page={{ page - 1 }}" class="btn btn-ghost">← Anterior</a>{% endif %}
+  <span style="color: var(--muted); padding: 0 14px; font-size: 13px;">Página {{ page }} de {{ total_pages }}</span>
+  {% if page < total_pages %}<a href="?{{ filter_qs }}&page={{ page + 1 }}" class="btn btn-ghost">Siguiente →</a>{% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card stub">
+  <h2>Sin movimientos</h2>
+  <p>No hay ventas en este período con los filtros actuales.</p>
+</div>
+{% endif %}
+
+{% endblock %}

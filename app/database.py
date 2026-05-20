@@ -165,6 +165,9 @@ def _apply_migrations() -> None:
         ALTER TABLE productos
         ADD COLUMN IF NOT EXISTS ml_category_id VARCHAR(64)
         """,
+        # v14 (2026-05-19): tabla ml_orders para tracking de ventas ML y
+        # decremento automático de stock. create_all() la crea — esta migración
+        # es defensiva por si quedó alguna versión vieja.
     ]
     try:
         with engine.begin() as conn:

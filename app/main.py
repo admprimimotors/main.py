@@ -33,6 +33,7 @@ from . import (
     clientes,
     database,
     ml_client,
+    ml_orders,
     ml_publisher,
     notas_credito,
     precios,
@@ -44,7 +45,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.42.0"
+APP_VERSION = "0.43.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -181,13 +182,138 @@ def logout(request: Request):
 # ===============================================================
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request, user: str = Depends(auth.require_user)):
-    """Landing privada — dashboard con métricas (placeholder hasta tener data)."""
+def home(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Landing privada — dashboard con widgets de ventas."""
+    # Trigger auto-sync de órdenes ML si pasó más de X minutos del último
+    # (best-effort, falla silenciosa para no romper la página).
+    _maybe_auto_sync_orders(db, request)
+
+    # Stats para los widgets — 3 períodos
+    try:
+        stats_24h = ml_orders.get_sales_stats(db, days=1)
+        stats_7d = ml_orders.get_sales_stats(db, days=7)
+        stats_30d = ml_orders.get_sales_stats(db, days=30)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        stats_24h = stats_7d = stats_30d = None
+
+    last_sync = None
+    try:
+        last_sync = ml_orders.get_last_synced_date(db)
+    except Exception:
+        pass
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"user": user, "active": "home", "version": APP_VERSION},
+        {
+            "user": user,
+            "active": "home",
+            "version": APP_VERSION,
+            "stats_24h": stats_24h,
+            "stats_7d": stats_7d,
+            "stats_30d": stats_30d,
+            "last_sync": last_sync,
+            "ml_configured": ml_client.is_configured(),
+        },
     )
+
+
+# Cache simple en memoria de cuándo fue el último auto-sync (no en DB
+# porque es info muy efímera y solo necesitamos throttling).
+_AUTO_SYNC_LAST_AT: dict = {"at": None}
+_AUTO_SYNC_INTERVAL_MIN = int(os.environ.get("ML_ORDERS_SYNC_INTERVAL_MIN", "15"))
+
+
+def _maybe_auto_sync_orders(db: DbSession, request: Request) -> None:
+    """
+    Dispara sync de órdenes ML si pasó más de N minutos del último.
+    Falla silenciosa — no queremos romper el dashboard si ML está caído.
+    """
+    if not ml_client.is_configured():
+        return
+    from datetime import datetime, timedelta, timezone as _tz
+    now = datetime.now(_tz.utc)
+    last = _AUTO_SYNC_LAST_AT.get("at")
+    if last is not None and (now - last) < timedelta(minutes=_AUTO_SYNC_INTERVAL_MIN):
+        return
+    try:
+        ml_orders.sync_orders(db, max_pages=10)
+        _AUTO_SYNC_LAST_AT["at"] = now
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        # No bloqueamos
+
+
+@app.get("/movimientos-stock", response_class=HTMLResponse)
+def movimientos_stock_page(
+    request: Request,
+    days: int = 30,
+    fuente: str = "",
+    sku: str = "",
+    page: int = 1,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Tabla cronológica de movimientos de stock (ML orders + remitos)."""
+    days = max(1, min(int(days), 365))
+    page = max(1, int(page))
+    try:
+        items, total = ml_orders.list_movimientos(
+            db, days=days, limit=100, fuente=fuente, sku=sku, page=page
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        items, total = [], 0
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error: {type(e).__name__}: {e}",
+        }
+    flash = request.session.pop("flash", None)
+    return templates.TemplateResponse(
+        request,
+        "movimientos_stock.html",
+        {
+            "user": user,
+            "active": "home",  # mismo tab que dashboard
+            "version": APP_VERSION,
+            "items": items,
+            "total": total,
+            "days": days,
+            "fuente": fuente,
+            "sku": sku,
+            "page": page,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/api/ml/orders/sync")
+def api_ml_orders_sync(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Sync manual de órdenes (botón "Sincronizar ventas ahora" del dashboard)."""
+    try:
+        summary = ml_orders.sync_orders(db, max_pages=20)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"ok": False, "error": f"{type(e).__name__}: {e}"},
+            status_code=500,
+        )
+    from datetime import datetime, timezone as _tz
+    _AUTO_SYNC_LAST_AT["at"] = datetime.now(_tz.utc)
+    return JSONResponse({"ok": True, "summary": summary})
 
 
 # ===============================================================

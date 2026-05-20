@@ -514,6 +514,83 @@ class CategoriaMLMapping(Base):
     )
 
 
+class MLOrder(Base):
+    """
+    Orden de venta sincronizada desde Mercado Libre.
+
+    Una orden ML puede contener múltiples items, pero modelamos UN MLOrder POR
+    ITEM dentro de la orden (con order_id + item_id como clave compuesta) para
+    poder hacer joins limpios con productos vía ml_item_id.
+
+    Cada row representa una "linea de venta" que afecta el stock de un SKU.
+
+    Lifecycle:
+      - status = "paid" (o "confirmed") → stock_applied=cantidad, decrementa producto.
+      - status = "cancelled" o "refunded" → revertimos stock_applied a 0 y re-incrementamos.
+
+    `last_status_at` permite detectar cambios (cancelaciones después de pagadas).
+    """
+    __tablename__ = "ml_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Order ID + Item ID de ML — clave de negocio única
+    ml_order_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    ml_item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Vínculo con el producto local (puede ser NULL si no encontramos match al
+    # momento de la sync — caso raro, se completa en re-sync)
+    producto_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("productos.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    # Snapshot del SKU al momento de la venta (estable aunque el producto se borre)
+    sku_snapshot: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    titulo_snapshot: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    cantidad: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    precio_unitario: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    total_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    moneda: Mapped[str] = mapped_column(String(3), default="ARS", nullable=False)
+
+    # Status de la orden en ML: "paid", "confirmed", "cancelled", "invalid",
+    # "partially_paid", "partially_refunded", "refunded"
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # Variation ID si la orden corresponde a una variante específica
+    ml_variation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Comprador (snapshot)
+    buyer_nickname: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+
+    # Fechas (todas de ML)
+    date_created: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    date_closed: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_status_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Cuánto stock aplicamos efectivamente (=cantidad cuando paid, 0 cuando cancelled).
+    # Permite calcular delta y revertir cuando una orden cambia de estado.
+    stock_applied: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Auditoría local
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        # Una row por (order, item) — si la misma orden tiene 2 items distintos,
+        # son 2 rows; si la misma orden viene 2 veces de ML, se actualiza la misma.
+        UniqueConstraint("ml_order_id", "ml_item_id", name="uq_ml_order_item"),
+        Index("ix_ml_orders_date_status", "date_created", "status"),
+    )
+
+
 class ProductoCompatibilidad(Base):
     __tablename__ = "producto_compatibilidades"
 

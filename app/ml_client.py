@@ -424,6 +424,60 @@ def update_item_title(db: Session, item_id: str, title: str) -> dict:
 # Compatibilidades (vehículos compatibles)
 # =============================================================
 
+def get_user_id(db: Session) -> Optional[str]:
+    """
+    Trae el seller ID (id de tu usuario en ML). Se usa para filtrar
+    /orders/search por seller. Cacheamos en memoria.
+    """
+    if "_user_id" in _access_token_cache and _access_token_cache.get("_user_id"):
+        return _access_token_cache["_user_id"]
+    try:
+        u = get_user_info(db)
+        uid = str(u.get("id") or "") or None
+        _access_token_cache["_user_id"] = uid
+        return uid
+    except Exception:
+        return None
+
+
+def search_orders(
+    db: Session,
+    *,
+    seller_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    status: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 50,
+    sort: str = "date_desc",
+) -> dict:
+    """
+    GET /orders/search?seller=ME → órdenes del vendedor autenticado.
+
+    Filtros:
+      - date_from: ISO 8601, ej "2026-05-01T00:00:00.000-00:00"
+      - status: "paid", "confirmed", "cancelled", "invalid"
+      - sort: "date_asc" o "date_desc"
+
+    Devuelve el body de ML tal cual: {results: [...], paging: {total, offset, limit}}.
+    """
+    if not seller_id:
+        seller_id = get_user_id(db) or "me"
+    params: dict = {
+        "seller": seller_id,
+        "offset": str(offset),
+        "limit": str(limit),
+        "sort": sort,
+    }
+    if date_from:
+        params["order.date_created.from"] = date_from
+    if status:
+        params["order.status"] = status
+    try:
+        return _get(db, "/orders/search", params=params) or {}
+    except MLClientError:
+        return {"results": [], "paging": {"total": 0}}
+
+
 def add_item_compatibilities(
     db: Session,
     item_id: str,
