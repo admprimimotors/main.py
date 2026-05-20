@@ -381,6 +381,21 @@
 
 <style>
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.copy-sku-btn {
+  margin-left: 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: all .12s;
+}
+.copy-sku-btn:hover { color: var(--brand-hover); border-color: var(--brand); background: var(--panel-2); }
+.copy-sku-btn.copied { color: #86efac; border-color: rgba(34,197,94,.40); background: rgba(34,197,94,.10); }
 </style>
 
 <script>
@@ -566,8 +581,19 @@
     {% endfor %}
   </select>
 
+  <select name="orden" class="filter-select" title="Ordenar resultados">
+    <option value="recientes"   {% if orden == 'recientes'   %}selected{% endif %}>Más recientes</option>
+    <option value="sku_asc"     {% if orden == 'sku_asc'     %}selected{% endif %}>SKU A→Z</option>
+    <option value="sku_desc"    {% if orden == 'sku_desc'    %}selected{% endif %}>SKU Z→A</option>
+    <option value="titulo_asc"  {% if orden == 'titulo_asc'  %}selected{% endif %}>Título A→Z</option>
+    <option value="precio_asc"  {% if orden == 'precio_asc'  %}selected{% endif %}>Precio: menor a mayor</option>
+    <option value="precio_desc" {% if orden == 'precio_desc' %}selected{% endif %}>Precio: mayor a menor</option>
+    <option value="stock_asc"   {% if orden == 'stock_asc'   %}selected{% endif %}>Stock: menor a mayor</option>
+    <option value="stock_desc"  {% if orden == 'stock_desc'  %}selected{% endif %}>Stock: mayor a menor</option>
+  </select>
+
   <button type="submit" class="btn">Filtrar</button>
-  {% if search or vinculadas or categoria or marca or rentabilidad %}
+  {% if search or vinculadas or categoria or marca or rentabilidad or orden != 'recientes' %}
   <a href="/catalogo" class="btn btn-ghost">Limpiar</a>
   {% endif %}
 </form>
@@ -657,7 +683,11 @@
           <td class="check-cell" onclick="event.stopPropagation();">
             <input type="checkbox" name="skus" value="{{ p.sku }}" class="row-check" />
           </td>
-          <td><code>{{ p.sku }}</code></td>
+          <td onclick="event.stopPropagation();" style="white-space: nowrap;">
+            <code>{{ p.sku }}</code>
+            <button type="button" class="copy-sku-btn" onclick="copySkuToClipboard(this, '{{ p.sku|e }}')"
+                    title="Copiar SKU al portapapeles">📋</button>
+          </td>
           <td>{{ p.titulo }}</td>
           <td>{{ p.categoria or '—' }}</td>
           <td>{{ p.marca or '—' }}</td>
@@ -894,10 +924,33 @@ function confirmBulkDelete() {
     `Esta acción NO se puede deshacer.`
   );
 }
+
+async function copySkuToClipboard(btn, sku) {
+  try {
+    await navigator.clipboard.writeText(sku);
+    const orig = btn.textContent;
+    btn.classList.add('copied');
+    btn.textContent = '✓';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.textContent = orig;
+    }, 1200);
+  } catch (e) {
+    // Fallback: select + execCommand
+    const ta = document.createElement('textarea');
+    ta.value = sku;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (_) {}
+    document.body.removeChild(ta);
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1200);
+  }
+}
 </script>
 
 {% set total_pages = ((total + page_size - 1) // page_size) if total > 0 else 1 %}
-{% set filter_qs = 'q=' ~ (search|urlencode) ~ '&vinculadas=' ~ (vinculadas|urlencode) ~ '&categoria=' ~ (categoria|urlencode) ~ '&marca=' ~ (marca|urlencode) ~ '&rentabilidad=' ~ (rentabilidad|urlencode) %}
+{% set filter_qs = 'q=' ~ (search|urlencode) ~ '&vinculadas=' ~ (vinculadas|urlencode) ~ '&categoria=' ~ (categoria|urlencode) ~ '&marca=' ~ (marca|urlencode) ~ '&rentabilidad=' ~ (rentabilidad|urlencode) ~ '&orden=' ~ (orden|urlencode) %}
 {% if total_pages > 1 %}
 <div class="pagination">
   {% if page > 1 %}

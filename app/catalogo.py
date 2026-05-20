@@ -778,6 +778,7 @@ def list_productos(
     categoria: str = "",
     marca: str = "",
     rentabilidad: str = "", # "below" → solo bajo el ideal, "ok" → solo arriba, "" → todas
+    orden: str = "recientes", # "recientes" / "sku_asc" / "sku_desc" / "precio_asc" / "precio_desc" / "stock_asc" / "stock_desc" / "titulo_asc"
 ) -> tuple[list[dict], int]:
     """
     Devuelve (productos, total). Cada producto incluye `compat_count` y
@@ -862,9 +863,22 @@ def list_productos(
     total = int(db.execute(count_q).scalar() or 0)
 
     page = max(1, page)
+    # Ordenamiento configurable. SKU usa collation natural via lower() para
+    # que "a 0095230" venga antes de "A 1047000" sin importar mayúsculas.
+    order_clauses = {
+        "recientes":   [Producto.created_at.desc(), Producto.id.desc()],
+        "sku_asc":     [sql_func.lower(Producto.sku).asc()],
+        "sku_desc":    [sql_func.lower(Producto.sku).desc()],
+        "precio_asc":  [Producto.precio_final.asc().nulls_last(), Producto.sku.asc()],
+        "precio_desc": [Producto.precio_final.desc().nulls_last(), Producto.sku.asc()],
+        "stock_asc":   [Producto.stock_actual.asc(), Producto.sku.asc()],
+        "stock_desc":  [Producto.stock_actual.desc(), Producto.sku.asc()],
+        "titulo_asc":  [sql_func.lower(Producto.titulo).asc()],
+    }.get(orden, [Producto.created_at.desc(), Producto.id.desc()])
+
     base_q = (
         base_q
-        .order_by(Producto.created_at.desc(), Producto.id.desc())
+        .order_by(*order_clauses)
         .limit(PAGE_SIZE)
         .offset((page - 1) * PAGE_SIZE)
     )

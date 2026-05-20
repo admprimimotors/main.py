@@ -81,7 +81,25 @@ def list_publicaciones(
         extra.append(Producto.categoria == categoria)
     if marca:
         extra.append(Producto.marca == marca)
-    # drift se aplica en memoria (más simple que armarlo en SQL)
+
+    # drift se aplica en SQL: stock_drift OR precio_drift
+    if drift in ("si", "no"):
+        # Stock drift: ml_stock IS NOT NULL AND stock_actual IS NOT NULL AND ml_stock != stock_actual
+        stock_drift_cond = (
+            Producto.ml_stock.is_not(None)
+            & Producto.stock_actual.is_not(None)
+            & (Producto.ml_stock != Producto.stock_actual)
+        )
+        precio_drift_cond = (
+            Producto.ml_precio.is_not(None)
+            & Producto.precio_final.is_not(None)
+            & (Producto.ml_precio != Producto.precio_final)
+        )
+        drift_cond = stock_drift_cond | precio_drift_cond
+        if drift == "si":
+            extra.append(drift_cond)
+        elif drift == "no":
+            extra.append(~drift_cond)
 
     if extra:
         base_q = base_q.where(*extra)
@@ -97,18 +115,31 @@ def list_publicaciones(
     )
     products = list(db.execute(base_q).scalars().all())
 
-    # Stats globales (sin paginación, con los mismos filtros)
+    # Stats globales (sin paginación, con search/categoria/marca pero
+    # sin filtro de status ni de drift — los tiles muestran absolutos
+    # para que se vea "X activas" independientemente del filtro activo).
     stats_q = (
         select(Producto.ml_status, sql_func.count(Producto.id))
         .where(Producto.ml_item_id.is_not(None))
         .group_by(Producto.ml_status)
     )
-    if extra:
-        # Para stats no aplicamos status (queremos saber cuántos hay de cada).
-        # Pero sí aplicamos search/categoria/marca.
-        non_status = [e for e in extra if "ml_status" not in str(e)]
-        if non_status:
-            stats_q = stats_q.where(*non_status)
+    # Solo aplicamos los filtros que NO sean status ni drift
+    stats_filters = []
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        stats_filters.append(or_(
+            Producto.sku.ilike(like),
+            Producto.titulo.ilike(like),
+            Producto.marca.ilike(like),
+            Producto.categoria.ilike(like),
+            Producto.ml_item_id.ilike(like),
+        ))
+    if categoria:
+        stats_filters.append(Producto.categoria == categoria)
+    if marca:
+        stats_filters.append(Producto.marca == marca)
+    if stats_filters:
+        stats_q = stats_q.where(*stats_filters)
     raw_stats = {row[0] or "unknown": row[1] for row in db.execute(stats_q).all()}
     stats = {
         "total": sum(raw_stats.values()),
@@ -119,8 +150,25 @@ def list_publicaciones(
         "inactive": raw_stats.get("inactive", 0),
     }
 
+    # Drift count global (no depende de paginación) — usamos misma condición SQL
+    drift_count_q = (
+        select(sql_func.count(Producto.id))
+        .where(Producto.ml_item_id.is_not(None))
+        .where(
+            (Producto.ml_stock.is_not(None)
+             & Producto.stock_actual.is_not(None)
+             & (Producto.ml_stock != Producto.stock_actual))
+            |
+            (Producto.ml_precio.is_not(None)
+             & Producto.precio_final.is_not(None)
+             & (Producto.ml_precio != Producto.precio_final))
+        )
+    )
+    if stats_filters:
+        drift_count_q = drift_count_q.where(*stats_filters)
+    drift_count = db.execute(drift_count_q).scalar() or 0
+
     rows = []
-    drift_count = 0
     for p in products:
         stock_drift = (
             p.ml_stock is not None
@@ -132,14 +180,6 @@ def list_publicaciones(
             and p.precio_final is not None
             and p.ml_precio != p.precio_final
         )
-        has_drift = stock_drift or precio_drift
-        if has_drift:
-            drift_count += 1
-
-        if drift == "si" and not has_drift:
-            continue
-        if drift == "no" and has_drift:
-            continue
 
         rows.append({
             "id": p.id,

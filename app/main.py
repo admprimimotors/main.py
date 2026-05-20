@@ -44,7 +44,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.41.0"
+APP_VERSION = "0.42.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -205,8 +205,9 @@ def catalogo_view(
     categoria: str = "",
     marca: str = "",
     rentabilidad: str = "",
+    orden: str = "recientes",
 ):
-    """Listado paginado de productos con buscador y filtros."""
+    """Listado paginado de productos con buscador, filtros y ordenamiento."""
     productos, total = catalogo.list_productos(
         db,
         search=q,
@@ -215,6 +216,7 @@ def catalogo_view(
         categoria=categoria,
         marca=marca,
         rentabilidad=rentabilidad,
+        orden=orden,
     )
     categorias_disponibles = catalogo.list_categorias(db)
     marcas_disponibles = catalogo.list_marcas(db)
@@ -249,6 +251,7 @@ def catalogo_view(
             "marcas_disponibles": marcas_disponibles,
             "placeholders_pendientes": placeholders_pendientes,
             "sync_pendientes": sync_pendientes,
+            "orden": orden,
         },
     )
 
@@ -2172,6 +2175,13 @@ def publicaciones_list(
         }
         rows, total, stats = [], 0, {}
 
+    # Guardar la URL relativa con filtros activos para que los bulk actions
+    # vuelvan a este mismo estado en vez de a /publicaciones limpio.
+    relative_url = request.url.path
+    if request.url.query:
+        relative_url += "?" + request.url.query
+    request.session["last_publicaciones_url"] = relative_url
+
     flash = request.session.pop("flash", None)
     return templates.TemplateResponse(
         request,
@@ -2234,7 +2244,10 @@ async def publicaciones_bulk_push(
             "type": "warning",
             "msg": "No seleccionaste ninguna publicación.",
         }
-        return RedirectResponse("/publicaciones", status_code=303)
+        return RedirectResponse(
+            request.session.get("last_publicaciones_url") or "/publicaciones",
+            status_code=303,
+        )
     try:
         n_ok, n_fail, errores = publicaciones.bulk_push_to_ml(db, skus)
     except Exception as e:
@@ -2244,7 +2257,10 @@ async def publicaciones_bulk_push(
             "type": "error",
             "msg": f"Error inesperado: {type(e).__name__}: {e}",
         }
-        return RedirectResponse("/publicaciones", status_code=303)
+        return RedirectResponse(
+            request.session.get("last_publicaciones_url") or "/publicaciones",
+            status_code=303,
+        )
 
     if n_ok and not n_fail:
         flash_type, msg = "success", f"✓ {n_ok} publicación(es) pusheada(s) a ML."
@@ -2273,7 +2289,10 @@ async def publicaciones_bulk_sync(
             "type": "warning",
             "msg": "No seleccionaste ninguna publicación.",
         }
-        return RedirectResponse("/publicaciones", status_code=303)
+        return RedirectResponse(
+            request.session.get("last_publicaciones_url") or "/publicaciones",
+            status_code=303,
+        )
     try:
         n_ok, n_fail, errores = publicaciones.refresh_status_from_ml(db, skus)
     except Exception as e:
@@ -2283,7 +2302,10 @@ async def publicaciones_bulk_sync(
             "type": "error",
             "msg": f"Error sincronizando: {type(e).__name__}: {e}",
         }
-        return RedirectResponse("/publicaciones", status_code=303)
+        return RedirectResponse(
+            request.session.get("last_publicaciones_url") or "/publicaciones",
+            status_code=303,
+        )
 
     if n_ok and not n_fail:
         flash_type, msg = "success", f"✓ {n_ok} publicación(es) sincronizada(s) desde ML."
@@ -2311,7 +2333,10 @@ async def _publicaciones_bulk_status(
             "type": "warning",
             "msg": "No seleccionaste ninguna publicación.",
         }
-        return RedirectResponse("/publicaciones", status_code=303)
+        return RedirectResponse(
+            request.session.get("last_publicaciones_url") or "/publicaciones",
+            status_code=303,
+        )
     try:
         n_ok, n_fail, errores = publicaciones.bulk_change_status(db, skus, new_status)
     except Exception as e:
@@ -2321,7 +2346,10 @@ async def _publicaciones_bulk_status(
             "type": "error",
             "msg": f"Error inesperado: {type(e).__name__}: {e}",
         }
-        return RedirectResponse("/publicaciones", status_code=303)
+        return RedirectResponse(
+            request.session.get("last_publicaciones_url") or "/publicaciones",
+            status_code=303,
+        )
 
     accion = {"active": "activadas", "paused": "pausadas", "closed": "cerradas"}.get(new_status, "actualizadas")
     if n_ok and not n_fail:
