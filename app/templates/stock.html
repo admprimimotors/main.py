@@ -178,8 +178,8 @@
   })();
 </script>
 
-{% if recent_list %}
 <h3 class="section-h">Últimos modificados por stock ({{ recent_list|length }})</h3>
+{% if recent_list %}
 <div class="card" style="padding: 0; overflow-x: auto;">
   <table class="data-table">
     <thead>
@@ -207,6 +207,13 @@
       {% endfor %}
     </tbody>
   </table>
+</div>
+{% else %}
+<div class="card" style="padding: 22px; color: var(--muted); font-size: 13px; line-height: 1.6;">
+  Aún no hay movimientos de stock registrados. La lista se va a llenar sola a medida que:
+  subas un Excel desde acá (con o sin <code>STOCK_DISTRI</code>), ajustes el stock manual desde
+  una ficha de producto, se descuente stock por una venta de ML, se emita un remito, o se sume
+  por una nota de crédito.
 </div>
 {% endif %}
 
