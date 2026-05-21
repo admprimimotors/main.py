@@ -45,7 +45,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.43.0"
+APP_VERSION = "0.44.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1162,10 +1162,17 @@ def stock_view(
 async def stock_upload(
     request: Request,
     archivo: UploadFile = File(...),
+    modo_distri: Optional[str] = Form(default=None),
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
-    """Recibe un Excel simplificado (SKU + Stock_Actual) y actualiza solo el stock."""
+    """
+    Recibe un Excel simplificado (SKU + Stock_Actual) y actualiza solo el stock.
+
+    Si `modo_distri` está activo (checkbox tildado en el form), el Stock_Actual
+    se interpreta como "stock del distribuidor" en unidades sueltas y se
+    convierte a cajas dividiéndolo por `unidades_por_envase` (de la ficha).
+    """
     fname = (archivo.filename or "").lower()
     if not fname.endswith((".xlsx", ".xls")):
         request.session["flash"] = {
@@ -1174,9 +1181,13 @@ async def stock_upload(
         }
         return RedirectResponse("/stock", status_code=303)
 
+    convert_distri = bool(modo_distri)  # checkbox marcado → "1"/"on"
+
     try:
         file_bytes = await archivo.read()
-        result = stock.process_stock_upload(db, file_bytes)
+        result = stock.process_stock_upload(
+            db, file_bytes, convert_distri=convert_distri
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1190,17 +1201,46 @@ async def stock_upload(
         }
         return RedirectResponse("/stock", status_code=303)
 
+    # Armado de mensaje flash
+    prefix_distri = "[Modo distri] " if convert_distri else ""
+
     if result.ok:
+        parts = [
+            f"✓ {result.actualizados} producto{'' if result.actualizados == 1 else 's'} "
+            f"actualizado{'' if result.actualizados == 1 else 's'}"
+        ]
+        if convert_distri:
+            parts.append(
+                f"{result.convertidos} convertido"
+                f"{'' if result.convertidos == 1 else 's'} por envase"
+            )
+            if result.sin_caja_completa:
+                skus_descartados = ", ".join(
+                    f"{c.sku} ({c.stock_distri}/{c.unidades_por_envase})"
+                    for c in result.sin_caja_completa[:8]
+                )
+                extra = (
+                    f" — {len(result.sin_caja_completa)} en 0 por no completar caja: "
+                    f"{skus_descartados}"
+                )
+                if len(result.sin_caja_completa) > 8:
+                    extra += f" (+{len(result.sin_caja_completa) - 8} más)"
+                parts.append(extra)
         request.session["flash"] = {
             "type": "success",
-            "msg": f"✓ {result.actualizados} producto{'' if result.actualizados == 1 else 's'} actualizado{'' if result.actualizados == 1 else 's'}.",
+            "msg": prefix_distri + ". ".join(parts) + ".",
         }
     else:
         msg = (
-            f"Procesado con errores. "
-            f"Actualizados: {result.actualizados}. "
-            f"Errores: {' · '.join(result.errores[:5])}"
+            f"{prefix_distri}Procesado con errores. "
+            f"Actualizados: {result.actualizados}"
         )
+        if convert_distri:
+            msg += (
+                f" · Convertidos por envase: {result.convertidos}"
+                f" · Descartados (sin caja completa): {len(result.sin_caja_completa)}"
+            )
+        msg += f". Errores: {' · '.join(result.errores[:5])}"
         if len(result.errores) > 5:
             msg += f" (+{len(result.errores) - 5} más)"
         request.session["flash"] = {

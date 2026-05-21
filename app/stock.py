@@ -130,9 +130,60 @@ def update_stock(db: Session, sku: str, new_stock: int) -> tuple[bool, str]:
 # Bulk update via Excel
 # =============================================================
 
+# Claves posibles en la ficha técnica que indican "unidades por envase / caja".
+# La búsqueda es tolerante: se prueba en este orden y se usa la primera que
+# matchee. Los headers del Excel del catálogo se normalizan vía _norm_col
+# (snake_case, sin tildes), así que "Unidades por envase" llega como
+# "unidades_por_envase".
+_FICHA_KEYS_UNIDADES_ENVASE: tuple[str, ...] = (
+    "unidades_por_envase",
+    "unidades_x_envase",
+    "unidades_por_caja",
+    "unidades_x_caja",
+    "u_por_envase",
+    "u_x_envase",
+)
+
+
+def _get_unidades_por_envase(ficha: dict | None) -> int | None:
+    """
+    Lee la cantidad de unidades por envase desde la ficha técnica.
+    Tolera varias variantes de nombre y valores numéricos como str/float/int.
+    Devuelve None si no encuentra ningún campo válido, o si el valor no es
+    un entero positivo.
+    """
+    if not ficha:
+        return None
+    for key in _FICHA_KEYS_UNIDADES_ENVASE:
+        if key in ficha:
+            raw = ficha[key]
+            try:
+                # Soporta "6", "6.0", 6, 6.0 — pero no "seis" ni texto basura
+                upe = int(float(str(raw).strip().replace(",", ".")))
+                if upe > 0:
+                    return upe
+            except (ValueError, TypeError, AttributeError):
+                continue
+    return None
+
+
+@dataclass
+class StockUploadConversion:
+    """Detalle por SKU cuando se aplica modo distribuidor."""
+    sku: str
+    stock_distri: int
+    unidades_por_envase: int
+    stock_final: int  # Cajas resultantes (= stock_distri // unidades_por_envase)
+
+
 @dataclass
 class StockUploadResult:
     actualizados: int = 0
+    # Modo distri:
+    convertidos: int = 0           # SKUs cuyo stock se dividió por unidades/envase
+    sin_caja_completa: list[StockUploadConversion] = field(default_factory=list)
+    # Detalle de cada conversión aplicada (útil para auditar)
+    conversiones: list[StockUploadConversion] = field(default_factory=list)
     errores: list[str] = field(default_factory=list)
 
     @property
@@ -140,10 +191,28 @@ class StockUploadResult:
         return len(self.errores) == 0
 
 
-def process_stock_upload(db: Session, file_bytes: bytes) -> StockUploadResult:
+def process_stock_upload(
+    db: Session,
+    file_bytes: bytes,
+    *,
+    convert_distri: bool = False,
+) -> StockUploadResult:
     """
     Procesa un Excel simplificado con SKU + Stock_Actual.
     Solo hace UPDATE del stock — los demás campos quedan intactos.
+
+    Si `convert_distri=True`, el valor de Stock_Actual se interpreta como
+    "stock del distribuidor" (unidades sueltas) y se divide por las
+    `unidades_por_envase` definidas en la ficha técnica del producto
+    (floor / piso de la división). Pensado para SKUs que se venden por
+    caja pero que el proveedor reporta por unidad (ej. Camisas de Motor).
+
+    Reglas en modo distri:
+      - Si el SKU no tiene `unidades_por_envase` en la ficha → ERROR.
+      - Si stock_distri < unidades_por_envase → stock_final = 0
+        (no llegamos a completar una caja). Se reporta como descartado.
+      - Si stock_distri % unidades_por_envase > 0 → stock_final = floor.
+        El excedente no se cuenta.
     """
     result = StockUploadResult()
 
@@ -174,8 +243,8 @@ def process_stock_upload(db: Session, file_bytes: bytes) -> StockUploadResult:
     sku_col = "sku" if "sku" in target_df.columns else "codigo"
     stock_col = "stock_actual" if "stock_actual" in target_df.columns else "stock"
 
-    # Recolectar updates (SKU → stock)
-    updates_map: dict[str, int] = {}
+    # Recolectar updates (SKU → stock crudo del Excel)
+    raw_inputs: dict[str, int] = {}
     for idx, row in target_df.iterrows():
         sku = _parse_str(row.get(sku_col))
         stock = _parse_int(row.get(stock_col))
@@ -187,24 +256,63 @@ def process_stock_upload(db: Session, file_bytes: bytes) -> StockUploadResult:
         if stock < 0:
             result.errores.append(f"Fila {idx + 2} (SKU {sku}): stock negativo no permitido")
             continue
-        updates_map[sku] = stock
+        raw_inputs[sku] = stock
+
+    if not raw_inputs:
+        return result
+
+    # Traer todos los productos de una sola query: necesitamos ficha_tecnica
+    # para el modo distri. Aunque no esté activado, conviene una sola lectura
+    # para validar existencia.
+    skus_list = list(raw_inputs.keys())
+    productos_db = {
+        p.sku: p for p in db.execute(
+            select(Producto).where(Producto.sku.in_(skus_list))
+        ).scalars().all()
+    }
+
+    # Decidir el stock final por SKU según el modo
+    updates_map: dict[str, int] = {}
+    for sku, stock_raw in raw_inputs.items():
+        prod = productos_db.get(sku)
+        if prod is None:
+            result.errores.append(f"SKU '{sku}' no existe en el catálogo")
+            continue
+
+        if not convert_distri:
+            # Modo clásico: el valor del Excel es el stock real
+            updates_map[sku] = stock_raw
+            continue
+
+        # --- Modo distribuidor ---
+        upe = _get_unidades_por_envase(prod.ficha_tecnica)
+        if upe is None:
+            result.errores.append(
+                f"SKU '{sku}': no tiene 'unidades por envase' en la ficha técnica. "
+                f"Cargá ese campo primero o subí el archivo sin el modo distribuidor."
+            )
+            continue
+
+        stock_final = stock_raw // upe  # floor
+        conv = StockUploadConversion(
+            sku=sku,
+            stock_distri=stock_raw,
+            unidades_por_envase=upe,
+            stock_final=stock_final,
+        )
+        result.conversiones.append(conv)
+        result.convertidos += 1
+        if stock_final == 0 and stock_raw > 0:
+            # No alcanzó a completar una caja → se descarta, queda en 0
+            result.sin_caja_completa.append(conv)
+        updates_map[sku] = stock_final
 
     if not updates_map:
         return result
 
-    # Validar qué SKUs existen (un solo query, evita N+1)
-    existing = set(
-        s for (s,) in db.execute(
-            select(Producto.sku).where(Producto.sku.in_(list(updates_map.keys())))
-        ).all()
-    )
-
     # UPDATE por SKU (uno por uno — para 50K filas habría que batchear,
     # pero para el flujo "llegó un lote" es razonable)
     for sku, stock in updates_map.items():
-        if sku not in existing:
-            result.errores.append(f"SKU '{sku}' no existe en el catálogo")
-            continue
         db.execute(
             update(Producto).where(Producto.sku == sku).values(stock_actual=stock)
         )

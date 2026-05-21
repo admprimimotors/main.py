@@ -123,12 +123,60 @@
     <button type="submit" class="btn">Subir Excel</button>
     <a href="/stock/template" class="btn btn-ghost">Descargar template</a>
   </form>
+
+  <label style="display: flex; gap: 8px; align-items: flex-start; margin-top: 14px;
+                padding: 10px 12px; border: 1px solid var(--border-soft);
+                border-radius: 8px; background: var(--panel-2); cursor: pointer;
+                font-size: 13px; line-height: 1.5;">
+    <input type="checkbox" name="modo_distri" form="" id="modo-distri-check"
+           style="margin-top: 3px; accent-color: var(--brand);" />
+    <span>
+      <strong style="color: var(--text);">Stock del distribuidor</strong>
+      <span style="color: var(--muted); display: block; font-size: 12px; margin-top: 2px;">
+        Convertir unidades → cajas (dividir <code>Stock_Actual</code> por
+        <code>unidades por envase</code> de cada ficha, redondeando hacia abajo).
+        Pensado para <code>STOCK_DISTRI</code> de camisas de motor.
+      </span>
+    </span>
+  </label>
+
   <div class="help-text">
     Excel simple con dos columnas: <code>SKU</code> y <code>Stock_Actual</code>.
     Solo se actualiza el stock — los demás campos del producto quedan intactos.
     Útil para "llegó un lote, actualizo 50 SKUs" sin tener que re-subir todo el catálogo.
+    <br><br>
+    <strong>Modo distribuidor activo:</strong> el proveedor reporta por unidad y nosotros
+    vendemos por caja. Si <code>Stock_Actual</code> en el Excel es 6 y la ficha tiene
+    <code>unidades por envase = 6</code>, el sistema guarda <code>1 caja</code>. Si hay
+    <code>7</code> unidades (excedente que no completa otra caja) también queda en <code>1</code>;
+    si hay <code>3</code> (no llega a una caja) queda en <code>0</code>. Los SKUs sin
+    <code>unidades por envase</code> en su ficha se rechazan con error.
   </div>
 </div>
+
+<script>
+  // El checkbox vive fuera del form (pegado al card), pero como queremos
+  // mandarlo con el upload, lo asociamos al form principal por JS.
+  (function () {
+    const form = document.querySelector('form[action="/stock/upload"]');
+    const cb = document.getElementById('modo-distri-check');
+    if (form && cb && !cb.getAttribute('form')) {
+      // Forma alternativa: al submit, copiar el valor adentro del form
+      form.addEventListener('submit', () => {
+        if (cb.checked) {
+          let hidden = form.querySelector('input[name="modo_distri"]');
+          if (!hidden) {
+            hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'modo_distri';
+            form.appendChild(hidden);
+          }
+          hidden.value = '1';
+        }
+      });
+    }
+  })();
+</script>
 
 <h3 class="section-h">Productos con stock bajo ({{ low_stock_list|length }})</h3>
 
