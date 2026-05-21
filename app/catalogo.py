@@ -416,6 +416,10 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
         chunk = rows[i: i + CHUNK]
         stmt = pg_insert(Producto).values(chunk)
         set_clauses = {"updated_at": sql_func.now()}
+        # Si el Excel master incluyó la columna stock_actual, también tocamos
+        # stock_updated_at para que aparezca en "Últimos modificados por stock".
+        if column_present.get("stock_actual"):
+            set_clauses["stock_updated_at"] = sql_func.now()
         for col, present in column_present.items():
             if present:
                 set_clauses[col] = getattr(stmt.excluded, col)

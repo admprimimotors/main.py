@@ -93,6 +93,13 @@ class Producto(Base):
 
     # Stock disponible
     stock_actual: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Timestamp del último write sobre stock_actual (cualquier path: upload masivo,
+    # ajuste manual desde la vista detalle, descuento por venta ML, remito, NC).
+    # Sirve para la lista "últimos modificados" sin confundirla con `updated_at`
+    # que también cambia ante edits de precio, título, ficha, etc.
+    stock_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     # Soft delete: en vez de borrar, marcamos activo=false.
     activo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)

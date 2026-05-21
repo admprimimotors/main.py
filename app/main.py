@@ -45,7 +45,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.44.0"
+APP_VERSION = "0.45.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1140,9 +1140,10 @@ def stock_view(
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
-    """Página principal de stock: summary + low-stock + upload form."""
+    """Página principal de stock: summary + últimos modificados + low-stock + upload form."""
     summary = stock.get_summary(db)
     low_stock_list = stock.list_low_stock(db, threshold=summary["low_threshold"])
+    recent_list = stock.list_recently_stock_updated(db, limit=30)
     flash = request.session.pop("flash", None)
     return templates.TemplateResponse(
         request,
@@ -1153,6 +1154,7 @@ def stock_view(
             "version": APP_VERSION,
             "summary": summary,
             "low_stock_list": low_stock_list,
+            "recent_list": recent_list,
             "flash": flash,
         },
     )

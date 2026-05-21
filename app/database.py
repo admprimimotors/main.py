@@ -168,6 +168,15 @@ def _apply_migrations() -> None:
         # v14 (2026-05-19): tabla ml_orders para tracking de ventas ML y
         # decremento automático de stock. create_all() la crea — esta migración
         # es defensiva por si quedó alguna versión vieja.
+        # v15 (2026-05-21): timestamp específico para movimientos de stock.
+        # `updated_at` cambia con cualquier edit; este campo se actualiza SOLO
+        # cuando se toca stock_actual. Permite mostrar "últimos modificados por
+        # stock" sin contaminar con cambios de precio/título/ficha.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS stock_updated_at TIMESTAMP WITH TIME ZONE
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_productos_stock_updated_at ON productos(stock_updated_at DESC)",
     ]
     try:
         with engine.begin() as conn:

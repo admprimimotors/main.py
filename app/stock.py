@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import pandas as pd
 from sqlalchemy import func as sql_func, select, update
@@ -105,6 +106,43 @@ def list_low_stock(
 
 
 # =============================================================
+# Últimos modificados por stock
+# =============================================================
+
+def list_recently_stock_updated(
+    db: Session,
+    limit: int = 30,
+) -> list[dict]:
+    """
+    Productos cuyo stock se modificó más recientemente (por cualquier path:
+    upload masivo, ajuste manual, descuento por venta ML, remito, NC, master).
+    Productos con `stock_updated_at IS NULL` (nunca tocados desde que existe
+    esta columna) quedan al final naturalmente.
+    """
+    q = (
+        select(Producto)
+        .where(
+            Producto.activo == True,  # noqa: E712
+            Producto.stock_updated_at.is_not(None),
+        )
+        .order_by(Producto.stock_updated_at.desc())
+        .limit(limit)
+    )
+    productos: list[dict] = []
+    for prod in db.execute(q).scalars().all():
+        productos.append({
+            "id": prod.id,
+            "sku": prod.sku,
+            "titulo": prod.titulo,
+            "categoria": prod.categoria,
+            "marca": prod.marca,
+            "stock_actual": prod.stock_actual,
+            "stock_updated_at": prod.stock_updated_at,
+        })
+    return productos
+
+
+# =============================================================
 # Update individual (set absoluto)
 # =============================================================
 
@@ -113,10 +151,11 @@ def update_stock(db: Session, sku: str, new_stock: int) -> tuple[bool, str]:
     if new_stock < 0:
         return False, "El stock no puede ser negativo"
 
+    now = datetime.now(timezone.utc)
     result = db.execute(
         update(Producto)
         .where(Producto.sku == sku)
-        .values(stock_actual=new_stock)
+        .values(stock_actual=new_stock, stock_updated_at=now)
     )
     if result.rowcount == 0:
         return False, f"SKU '{sku}' no existe"
@@ -312,9 +351,12 @@ def process_stock_upload(
 
     # UPDATE por SKU (uno por uno — para 50K filas habría que batchear,
     # pero para el flujo "llegó un lote" es razonable)
+    now = datetime.now(timezone.utc)
     for sku, stock in updates_map.items():
         db.execute(
-            update(Producto).where(Producto.sku == sku).values(stock_actual=stock)
+            update(Producto)
+            .where(Producto.sku == sku)
+            .values(stock_actual=stock, stock_updated_at=now)
         )
         result.actualizados += 1
 

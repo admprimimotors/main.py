@@ -216,6 +216,7 @@ def crear_remito(
         # Descontar stock SOLO si tiene producto
         if prod is not None:
             prod.stock_actual = prod.stock_actual - it["cantidad"]
+            prod.stock_updated_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(remito)

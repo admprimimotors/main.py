@@ -192,6 +192,7 @@ def _process_order_item(
         if nuevo_stock < 0:
             nuevo_stock = 0  # no permitimos stock negativo en local
         prod.stock_actual = nuevo_stock
+        prod.stock_updated_at = datetime.now(timezone.utc)
         existing.stock_applied = desired_stock_applied
     elif delta_stock != 0 and prod is None:
         # Sin producto local, ni siquiera bajamos stock — solo registramos

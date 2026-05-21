@@ -156,6 +156,7 @@ def crear_nc(
         # SUMAR stock para items con producto (inverso del remito)
         if prod is not None:
             prod.stock_actual = prod.stock_actual + it["cantidad"]
+            prod.stock_updated_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(nc)
@@ -183,6 +184,7 @@ def anular_nc(
             ).scalar_one_or_none()
             if prod is not None:
                 prod.stock_actual = prod.stock_actual - it.cantidad
+                prod.stock_updated_at = datetime.now(timezone.utc)
 
     nc.estado = "anulada"
     nc.fecha_anulacion = datetime.now(timezone.utc)
