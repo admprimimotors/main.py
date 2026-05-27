@@ -34,6 +34,7 @@ from . import (
     database,
     ml_client,
     ml_orders,
+    ml_price_tracker,
     ml_publisher,
     notas_credito,
     precios,
@@ -191,6 +192,7 @@ def home(
     # Trigger auto-sync de órdenes ML si pasó más de X minutos del último
     # (best-effort, falla silenciosa para no romper la página).
     _maybe_auto_sync_orders(db, request)
+    _maybe_auto_price_snapshot(db, request)
 
     # Stats para los widgets — 3 períodos
     try:
@@ -249,6 +251,36 @@ def _maybe_auto_sync_orders(db: DbSession, request: Request) -> None:
         import traceback
         traceback.print_exc()
         # No bloqueamos
+
+
+# ===============================================================
+# Auto-snapshot diario de precios ML — construye histórico de cambios
+# ===============================================================
+# Cache en memoria del último snapshot — throttling.
+_AUTO_PRICE_SNAPSHOT_LAST_AT: dict = {"at": None}
+# Cada cuántas horas tomar snapshot (default: 24h = 1x por día)
+_AUTO_PRICE_SNAPSHOT_INTERVAL_HOURS = int(os.environ.get("ML_PRICE_SNAPSHOT_INTERVAL_HOURS", "24"))
+
+
+def _maybe_auto_price_snapshot(db: DbSession, request: Request) -> None:
+    """
+    Dispara snapshot de precios ML si pasó más de N horas del último.
+    Falla silenciosa — no rompe el dashboard si ML está caído.
+    Como recorrer 1.000+ items toma 30-60s, se hace solo 1 vez por día.
+    """
+    if not ml_client.is_configured():
+        return
+    from datetime import datetime, timedelta, timezone as _tz
+    now = datetime.now(_tz.utc)
+    last = _AUTO_PRICE_SNAPSHOT_LAST_AT.get("at")
+    if last is not None and (now - last) < timedelta(hours=_AUTO_PRICE_SNAPSHOT_INTERVAL_HOURS):
+        return
+    try:
+        ml_price_tracker.snapshot_all_active(db)
+        _AUTO_PRICE_SNAPSHOT_LAST_AT["at"] = now
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 
 @app.get("/movimientos-stock", response_class=HTMLResponse)
@@ -314,6 +346,114 @@ def api_ml_orders_sync(
     from datetime import datetime, timezone as _tz
     _AUTO_SYNC_LAST_AT["at"] = datetime.now(_tz.utc)
     return JSONResponse({"ok": True, "summary": summary})
+
+
+# ===============================================================
+# Histórico de precios ML — snapshot manual + consulta + vista
+# ===============================================================
+
+@app.post("/api/ml/prices/snapshot")
+def api_ml_prices_snapshot(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Forzar snapshot de precios AHORA (botón 'Actualizar histórico')."""
+    try:
+        summary = ml_price_tracker.snapshot_all_active(db)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"ok": False, "error": f"{type(e).__name__}: {e}"},
+            status_code=500,
+        )
+    from datetime import datetime, timezone as _tz
+    _AUTO_PRICE_SNAPSHOT_LAST_AT["at"] = datetime.now(_tz.utc)
+    return JSONResponse({"ok": True, "summary": summary})
+
+
+@app.get("/api/ml/prices/history")
+def api_ml_prices_history(
+    item_id: str,
+    only_changes: bool = True,
+    limit: int = 100,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """JSON con el histórico de precios de un item ML."""
+    snaps = ml_price_tracker.historial_de_item(
+        db, item_id, only_changes=only_changes, limit=limit
+    )
+    rows = [
+        {
+            "captured_at": s.captured_at.isoformat() if s.captured_at else None,
+            "price": float(s.price) if s.price is not None else None,
+            "base_price": float(s.base_price) if s.base_price is not None else None,
+            "original_price": float(s.original_price) if s.original_price is not None else None,
+            "currency": s.currency,
+            "status": s.status,
+            "available_quantity": s.available_quantity,
+            "sold_quantity": s.sold_quantity,
+            "is_change": bool(s.is_change),
+            "title": s.title,
+            "sku": s.sku,
+        }
+        for s in snaps
+    ]
+    return JSONResponse({"ok": True, "item_id": item_id, "count": len(rows), "rows": rows})
+
+
+@app.get("/precios-historial", response_class=HTMLResponse)
+def precios_historial_view(
+    request: Request,
+    item_id: str = "",
+    days: int = 30,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Vista del dashboard: histórico de precios.
+    - Si `item_id` viene: muestra el histórico completo de ese item.
+    - Si no: lista los cambios recientes del catálogo entero.
+    """
+    item_id = (item_id or "").strip()
+    if item_id:
+        snaps = ml_price_tracker.historial_de_item(db, item_id, only_changes=False, limit=200)
+        cambios_globales = []
+        modo = "item"
+    else:
+        snaps = []
+        cambios_globales = ml_price_tracker.cambios_recientes(db, days=days, limit=100)
+        modo = "globales"
+
+    # Última fecha de snapshot global
+    from sqlalchemy import select as _select, func as _func
+    from .models import MLPriceSnapshot
+    ultimo_snap = db.execute(
+        _select(_func.max(MLPriceSnapshot.captured_at))
+    ).scalar_one_or_none()
+    total_snaps = db.execute(
+        _select(_func.count(MLPriceSnapshot.id))
+    ).scalar_one_or_none() or 0
+    items_trackeados = db.execute(
+        _select(_func.count(_func.distinct(MLPriceSnapshot.ml_item_id)))
+    ).scalar_one_or_none() or 0
+
+    return templates.TemplateResponse(
+        "precios_historial.html",
+        {
+            "request": request,
+            "modo": modo,
+            "item_id": item_id,
+            "snaps": snaps,
+            "cambios_globales": cambios_globales,
+            "ultimo_snapshot": ultimo_snap,
+            "total_snaps": total_snaps,
+            "items_trackeados": items_trackeados,
+            "days": days,
+        },
+    )
 
 
 # ===============================================================

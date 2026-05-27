@@ -101,6 +101,13 @@ class Producto(Base):
         DateTime(timezone=True), nullable=True, index=True
     )
 
+    # Días de disponibilidad / tiempo de fabricación que se publica en ML.
+    # Si está seteado, ML muestra "Disponible en X días después de tu compra"
+    # en lugar de "Llega gratis mañana". Se mapea al sale_term MANUFACTURING_TIME.
+    # Se carga desde el Excel master con la columna `dias_disponibilidad`.
+    # NULL = no se manda nada a ML (default = "Llega mañana" si hay stock).
+    dias_disponibilidad: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     # Soft delete: en vez de borrar, marcamos activo=false.
     activo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
 
@@ -631,4 +638,46 @@ class ProductoCompatibilidad(Base):
     __table_args__ = (
         # Un mismo producto no se duplica para el mismo vehículo
         UniqueConstraint("producto_id", "vehiculo_id", name="uq_producto_vehiculo"),
+    )
+
+
+# =============================================================
+# MLPriceSnapshot — snapshots de precios ML para construir histórico
+# =============================================================
+
+class MLPriceSnapshot(Base):
+    """
+    Snapshot de precio de una publicación ML en un momento dado.
+    Como ML no expone histórico vía API, construimos el nuestro
+    capturando snapshots periódicos (auto-sync diario desde el dashboard).
+    """
+    __tablename__ = "ml_price_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    ml_item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    sku: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    # Datos de precio
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    base_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    original_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    currency: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+
+    # Metadata de la publicación al momento del snapshot
+    status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    available_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sold_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Flag: True si el precio cambió respecto al snapshot anterior del mismo item.
+    # Permite filtrar fácilmente solo los cambios reales (sin ruido de snapshots iguales).
+    is_change: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+    __table_args__ = (
+        Index("ix_mlpricesnap_item_capt", "ml_item_id", "captured_at"),
     )

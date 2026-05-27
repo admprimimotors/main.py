@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Histórico de precios{% endblock %}
+{% set active = "precios_historial" %}
+{% block content %}
+<style>
+  .hist-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .hist-table th, .hist-table td { padding: 6px 10px; border-bottom: 1px solid #e0e0e0; text-align: left; }
+  .hist-table th { background: #f4f4f4; font-weight: 600; }
+  .hist-table tr:hover { background: #fafafa; }
+  .badge-change { background: #ffe6cc; color: #b85b00; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .badge-same { color: #999; font-size: 11px; }
+  .price-up { color: #c0392b; font-weight: 600; }
+  .price-down { color: #27ae60; font-weight: 600; }
+  .meta { color: #777; font-size: 12px; }
+  .header-actions { display: flex; gap: 12px; align-items: center; margin: 16px 0; }
+  .search-box input { padding: 6px 10px; width: 260px; }
+  .btn { padding: 8px 14px; background: #2C3E50; color: #fff; border: 0; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+  .btn:hover { background: #1a2533; }
+  .btn-secondary { background: #5d6d7e; }
+  .stat-card { display: inline-block; background: #f4f4f4; padding: 10px 18px; border-radius: 5px; margin-right: 12px; }
+  .stat-card .num { font-size: 22px; font-weight: 700; color: #2c3e50; }
+  .stat-card .lbl { font-size: 11px; color: #777; text-transform: uppercase; }
+</style>
+
+<h1>Histórico de precios ML</h1>
+
+<div style="margin-bottom: 18px;">
+  <div class="stat-card">
+    <div class="num">{{ items_trackeados }}</div>
+    <div class="lbl">Items trackeados</div>
+  </div>
+  <div class="stat-card">
+    <div class="num">{{ total_snaps }}</div>
+    <div class="lbl">Snapshots totales</div>
+  </div>
+  <div class="stat-card">
+    <div class="num">
+      {% if ultimo_snapshot %}{{ ultimo_snapshot.strftime("%d/%m %H:%M") }}{% else %}--{% endif %}
+    </div>
+    <div class="lbl">Último snapshot</div>
+  </div>
+</div>
+
+<div class="header-actions">
+  <form method="get" action="/precios-historial" class="search-box">
+    <input type="text" name="item_id" value="{{ item_id }}" placeholder="MLA1234567890" />
+    <button type="submit" class="btn">Buscar item</button>
+    {% if item_id %}<a href="/precios-historial" class="btn btn-secondary">Volver al listado</a>{% endif %}
+  </form>
+  <form method="post" action="/api/ml/prices/snapshot" onsubmit="
+      event.preventDefault();
+      const btn = this.querySelector('button');
+      btn.disabled = true; btn.innerText = 'Capturando…';
+      fetch(this.action, {method:'POST'}).then(r=>r.json()).then(d=>{
+        if(d.ok){
+          alert('✓ Snapshot OK. '+d.summary.n_guardados+' items capturados, '+d.summary.n_cambios+' cambios detectados.');
+        } else {
+          alert('✗ Error: '+(d.error||'desconocido'));
+        }
+        location.reload();
+      });">
+    <button type="submit" class="btn">Capturar snapshot ahora</button>
+  </form>
+</div>
+
+{% if modo == "item" %}
+  <h2>Item {{ item_id }}</h2>
+  {% if snaps %}
+    <p class="meta">{{ snaps|length }} snapshots para este item. Resaltados en naranja: cambios de precio detectados.</p>
+    <table class="hist-table">
+      <thead><tr>
+        <th>Fecha</th><th>Precio</th><th>vs anterior</th>
+        <th>Stock</th><th>Vendidos</th><th>Status</th><th>SKU</th>
+      </tr></thead>
+      <tbody>
+        {% set anterior = namespace(p=None) %}
+        {% for s in snaps|reverse %}
+          {% set p = s.price|float %}
+          {% set delta = (p - anterior.p) if anterior.p is not none else None %}
+          {% set delta_pct = (delta / anterior.p * 100) if (delta is not none and anterior.p) else None %}
+          {% set anterior.p = p %}
+        {% endfor %}
+        {% set running = namespace(p=None) %}
+        {% for s in snaps|sort(attribute='captured_at') %}
+          {% set p = s.price|float %}
+          <tr {% if s.is_change %}style="background:#fff7eb"{% endif %}>
+            <td>{{ s.captured_at.strftime("%d/%m/%Y %H:%M") }}</td>
+            <td><strong>${{ "{:,.2f}".format(p) }}</strong> {{ s.currency or "ARS" }}</td>
+            <td>
+              {% if running.p is not none %}
+                {% set delta = p - running.p %}
+                {% if delta > 0 %}
+                  <span class="price-up">▲ +${{ "{:,.2f}".format(delta) }} ({{ "{:+.1f}".format(delta/running.p*100) }}%)</span>
+                {% elif delta < 0 %}
+                  <span class="price-down">▼ ${{ "{:,.2f}".format(delta) }} ({{ "{:+.1f}".format(delta/running.p*100) }}%)</span>
+                {% else %}
+                  <span class="badge-same">sin cambio</span>
+                {% endif %}
+              {% else %}
+                <span class="badge-change">baseline</span>
+              {% endif %}
+            </td>
+            <td>{{ s.available_quantity }}</td>
+            <td>{{ s.sold_quantity }}</td>
+            <td>{{ s.status }}</td>
+            <td>{{ s.sku or "—" }}</td>
+          </tr>
+          {% set running.p = p %}
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No hay snapshots registrados para este item todavía. Probá capturar uno con el botón de arriba.</p>
+  {% endif %}
+
+{% else %}
+  <h2>Cambios recientes (últimos {{ days }} días)</h2>
+  {% if cambios_globales %}
+    <p class="meta">{{ cambios_globales|length }} cambios de precio detectados. Click en el item_id para ver el histórico completo.</p>
+    <table class="hist-table">
+      <thead><tr>
+        <th>Fecha</th><th>Item</th><th>SKU</th><th>Título</th>
+        <th>Precio</th><th>Status</th>
+      </tr></thead>
+      <tbody>
+        {% for s in cambios_globales %}
+          <tr>
+            <td>{{ s.captured_at.strftime("%d/%m %H:%M") }}</td>
+            <td><a href="/precios-historial?item_id={{ s.ml_item_id }}">{{ s.ml_item_id }}</a></td>
+            <td>{{ s.sku or "—" }}</td>
+            <td>{{ s.title[:60] if s.title else "—" }}</td>
+            <td><strong>${{ "{:,.2f}".format(s.price|float) }}</strong></td>
+            <td>{{ s.status }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No se detectaron cambios de precio en los últimos {{ days }} días. El sistema empieza a registrar histórico desde que se activa.</p>
+    <p class="meta">Tip: usá el botón "Capturar snapshot ahora" para forzar una captura. El auto-snapshot diario se dispara automáticamente cuando alguien entra al dashboard.</p>
+  {% endif %}
+{% endif %}
+
+{% endblock %}

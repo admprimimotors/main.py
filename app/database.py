@@ -177,6 +177,38 @@ def _apply_migrations() -> None:
         ADD COLUMN IF NOT EXISTS stock_updated_at TIMESTAMP WITH TIME ZONE
         """,
         "CREATE INDEX IF NOT EXISTS ix_productos_stock_updated_at ON productos(stock_updated_at DESC)",
+        # v17 (2026-05-27): snapshots de precios ML para construir histórico.
+        # ML no expone historial vía API — lo armamos con capturas periódicas.
+        """
+        CREATE TABLE IF NOT EXISTS ml_price_snapshots (
+            id SERIAL PRIMARY KEY,
+            ml_item_id VARCHAR(64) NOT NULL,
+            title VARCHAR(500),
+            sku VARCHAR(64),
+            price NUMERIC(12, 2) NOT NULL,
+            base_price NUMERIC(12, 2),
+            original_price NUMERIC(12, 2),
+            currency VARCHAR(8),
+            status VARCHAR(20),
+            available_quantity INTEGER,
+            sold_quantity INTEGER,
+            is_change BOOLEAN NOT NULL DEFAULT FALSE,
+            captured_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_mlpricesnap_item ON ml_price_snapshots(ml_item_id)",
+        "CREATE INDEX IF NOT EXISTS ix_mlpricesnap_sku ON ml_price_snapshots(sku)",
+        "CREATE INDEX IF NOT EXISTS ix_mlpricesnap_capt ON ml_price_snapshots(captured_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_mlpricesnap_change ON ml_price_snapshots(is_change)",
+        "CREATE INDEX IF NOT EXISTS ix_mlpricesnap_item_capt ON ml_price_snapshots(ml_item_id, captured_at)",
+        # v16 (2026-05-26): días de disponibilidad / tiempo de fabricación.
+        # Si está seteado, se publica en ML como sale_term MANUFACTURING_TIME
+        # y la publicación muestra "Disponible en X días después de tu compra".
+        # NULL = no se manda (default ML "Llega mañana" si hay stock).
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS dias_disponibilidad INTEGER
+        """,
     ]
     try:
         with engine.begin() as conn:
