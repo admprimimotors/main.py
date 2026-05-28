@@ -46,7 +46,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.46.0"
+APP_VERSION = "0.46.1"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -2146,6 +2146,133 @@ def api_ml_category_search(
     return JSONResponse({"results": enriched[:10]})
 
 
+@app.get("/api/ml/categorias/buscar")
+def api_ml_categorias_buscar(
+    q: str = "",
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Buscador de categorías para la página /buscar-categoria.
+
+    Combina 3 fuentes (en orden de prioridad):
+      1. `predict_category` — el predictor oficial de ML (mejor "intent match")
+      2. `domain_discovery_search` — qué dominio/categoría coincide
+      3. `search_items` (fallback) — agrupar category_id por frecuencia
+
+    Devuelve la lista normalizada al formato que espera el template:
+      {results: [{category_id, category_name, path_from_root: [{id, name}],
+                  domain_id, domain_name}]}
+
+    La primera categoría queda marcada como "sugerida" en el front.
+    """
+    query = (q or "").strip()
+    if len(query) < 2:
+        return JSONResponse({"results": []})
+
+    # Acumulador: cada cat_id solo una vez, con la mejor info disponible
+    seen: dict[str, dict] = {}
+
+    def _add(cat_id: str, name: str = "", path_raw: list | None = None,
+             domain_id: str = "", domain_name: str = "", priority: int = 0):
+        if not cat_id:
+            return
+        if cat_id not in seen:
+            seen[cat_id] = {
+                "category_id": cat_id,
+                "category_name": name or "",
+                "path_from_root": path_raw or [],
+                "domain_id": domain_id or "",
+                "domain_name": domain_name or "",
+                "priority": priority,
+            }
+        else:
+            # Conservar el mayor priority y rellenar campos faltantes
+            s = seen[cat_id]
+            if priority > s["priority"]:
+                s["priority"] = priority
+            if name and not s["category_name"]:
+                s["category_name"] = name
+            if path_raw and not s["path_from_root"]:
+                s["path_from_root"] = path_raw
+            if domain_id and not s["domain_id"]:
+                s["domain_id"] = domain_id
+            if domain_name and not s["domain_name"]:
+                s["domain_name"] = domain_name
+
+    # 1. Predictor oficial (más confiable para títulos completos)
+    try:
+        preds = ml_client.predict_category(db, query, limit=5)
+    except Exception:
+        preds = []
+    for i, p in enumerate(preds):
+        _add(
+            p.get("category_id"),
+            name=p.get("category_name") or "",
+            path_raw=p.get("path_from_root") or [],
+            priority=100 - i,  # primero = mayor priority
+        )
+
+    # 2. Domain discovery (mejor para keywords sueltos)
+    try:
+        discoveries = ml_client.domain_discovery_search(db, query, limit=8)
+    except Exception:
+        discoveries = []
+    for i, d in enumerate(discoveries):
+        _add(
+            d.get("category_id"),
+            name=d.get("category_name") or "",
+            domain_id=d.get("domain_id") or "",
+            domain_name=d.get("domain_name") or "",
+            priority=50 - i,
+        )
+
+    # 3. Fallback: search de items (solo si no encontramos nada)
+    if not seen:
+        try:
+            items = ml_client.search_items(db, query, limit=15)
+        except Exception:
+            items = []
+        cat_counts: dict[str, int] = {}
+        for it in items:
+            cat = it.get("category_id")
+            if cat:
+                cat_counts[cat] = cat_counts.get(cat, 0) + 1
+        for cat_id, count in cat_counts.items():
+            _add(cat_id, priority=count)
+
+    # Enriquecer: para cada categoría, traer path_from_root y name si no los tenemos
+    for cat_id, info in seen.items():
+        if not info["path_from_root"] or not info["category_name"]:
+            cat_full = ml_client.get_category(db, cat_id) or {}
+            if not info["category_name"]:
+                info["category_name"] = cat_full.get("name") or cat_id
+            if not info["path_from_root"]:
+                info["path_from_root"] = cat_full.get("path_from_root") or []
+
+    # Normalizar path_from_root al formato [{id, name}, ...]
+    results = []
+    for info in seen.values():
+        norm_path = []
+        for p in info["path_from_root"]:
+            if isinstance(p, dict):
+                norm_path.append({"id": p.get("id", ""), "name": p.get("name", "")})
+        results.append({
+            "category_id": info["category_id"],
+            "category_name": info["category_name"],
+            "path_from_root": norm_path,
+            "domain_id": info["domain_id"],
+            "domain_name": info["domain_name"],
+            "_priority": info["priority"],
+        })
+
+    # Orden por priority desc, después por nombre
+    results.sort(key=lambda x: (-x["_priority"], x["category_name"]))
+    for r in results:
+        r.pop("_priority", None)
+
+    return JSONResponse({"results": results[:10]})
+
 
 @app.get("/catalogo/{sku}/publicar", response_class=HTMLResponse)
 def catalogo_publicar_form(
@@ -3856,46 +3983,55 @@ def nc_anular(
 
 
 # ===============================================================
-# Stubs — secciones todavía sin construir
+# Buscador de categorías de Mercado Libre
 # ===============================================================
-# Cada feature real va a reemplazar uno de estos handlers cuando esté lista.
-# El objetivo del stub es que el sidebar funcione end-to-end desde el día 1
-# (clickeás cualquier sección y te lleva a una página coherente).
+# Permite, dado un término de búsqueda (ej. "bujía de precalentamiento"),
+# obtener el ID de categoría MLA y su ruta completa, para pegarlos en la
+# planilla masiva de publicación.
+#
+# Usa la API pública de ML (sin token):
+#   /sites/MLA/domain_discovery/search?q=...&limit=...
+#   /categories/{ID}            (para armar el path_from_root)
+#
+# Hay una caché en memoria de path_from_root por category_id, porque ese
+# endpoint cambia muy pocas veces y se consulta repetido.
 
-_STUBS = [
-    # "catalogo" ya no es stub — vive en su propio módulo (app/catalogo.py + rutas más abajo)
-    # "stock" ya no es stub — vive en app/stock.py + rutas dedicadas
-    # "precios" ya no es stub — vive en app/precios.py + rutas dedicadas
-    # "clientes" ya no es stub — vive en app/clientes.py + rutas dedicadas
-    # "publicaciones" ya no es stub — vive en app/publicaciones.py + rutas dedicadas
-    ("mensajes", "Mensajes ML",
-     "Preguntas de compradores en Mercado Libre y respuestas "
-     "automáticas inteligentes."),
-    ("config", "Configuración",
-     "Tokens de Mercado Libre, ajustes del sistema y gestión "
-     "de usuarios del panel."),
-]
+import requests as _requests
+from functools import lru_cache as _lru_cache
+
+_ML_PUBLIC_BASE = "https://api.mercadolibre.com"
+_BC_TIMEOUT = 10
 
 
-def _make_stub_handler(slug: str, name: str, desc: str):
-    """Factory: arma un handler para una sección stub."""
-    def _handler(request: Request, user: str = Depends(auth.require_user)):
-        return templates.TemplateResponse(
-            request,
-            "stub.html",
-            {
-                "user": user,
-                "active": slug,
-                "version": APP_VERSION,
-                "section_name": name,
-                "section_desc": desc,
-            },
+@_lru_cache(maxsize=512)
+def _bc_path_from_root(category_id: str):
+    """Devuelve path_from_root de una categoría. Cacheado en memoria."""
+    try:
+        r = _requests.get(
+            f"{_ML_PUBLIC_BASE}/categories/{category_id}",
+            timeout=_BC_TIMEOUT,
         )
-    _handler.__name__ = f"stub_{slug}"
-    return _handler
+        if r.status_code != 200:
+            return tuple()
+        data = r.json() or {}
+        path = data.get("path_from_root") or []
+        return tuple((p.get("id"), p.get("name")) for p in path)
+    except Exception:
+        return tuple()
 
 
-for _slug, _name, _desc in _STUBS:
-    app.get(f"/{_slug}", response_class=HTMLResponse)(
-        _make_stub_handler(_slug, _name, _desc)
+@app.get("/buscar-categoria", response_class=HTMLResponse)
+def buscar_categoria_page(
+    request: Request,
+    user: str = Depends(auth.require_user),
+):
+    """Página del buscador de categorías de Mercado Libre."""
+    return templates.TemplateResponse(
+        request,
+        "buscar_categoria.html",
+        {
+            "user": user,
+            "active": "buscar_categoria",
+            "version": APP_VERSION,
+        },
     )

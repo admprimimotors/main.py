@@ -548,9 +548,12 @@ def _shipping_block(price: Decimal) -> dict:
     return block
 
 
-def _sale_terms_block() -> list[dict]:
+def _sale_terms_block(producto: Optional[Producto] = None) -> list[dict]:
     """
     Garantía default según política de Primi: 30 días de fábrica.
+    Si el `producto` tiene `dias_disponibilidad` seteado, agrega
+    MANUFACTURING_TIME para que ML muestre "Disponible en X días después de
+    tu compra" en la publicación.
 
     WARRANTY_TYPE es de lista cerrada — ML pide value_id, no value_name.
     Los IDs son estables entre categorías:
@@ -558,8 +561,9 @@ def _sale_terms_block() -> list[dict]:
       - 2230280 = Garantía del vendedor
       - 2230281 = Sin garantía
     WARRANTY_TIME es free-text con value_struct {number, unit}.
+    MANUFACTURING_TIME es free-text con value_struct {number, unit} en días.
     """
-    return [
+    terms: list[dict] = [
         {
             "id": "WARRANTY_TYPE",
             "value_id": "2230279",
@@ -574,6 +578,28 @@ def _sale_terms_block() -> list[dict]:
             },
         },
     ]
+
+    # Tiempo de fabricación / disponibilidad — solo si el producto lo tiene
+    # configurado. ML lo expone como "Disponible en X días después de tu compra".
+    dias = getattr(producto, "dias_disponibilidad", None) if producto else None
+    if dias:
+        try:
+            dias_int = int(dias)
+            if dias_int > 0:
+                terms.append({
+                    "id": "MANUFACTURING_TIME",
+                    "value_name": f"{dias_int} días",
+                    "value_struct": {
+                        "number": dias_int,
+                        "unit": "días",
+                    },
+                })
+        except (TypeError, ValueError):
+            # Valor inválido en la DB — lo ignoramos en silencio para no romper
+            # la publicación.
+            pass
+
+    return terms
 
 
 def is_catalog_category(db: Session, category_id: str) -> bool:
@@ -624,7 +650,7 @@ def build_create_payload(
         "condition": DEFAULT_CONDITION,
         "pictures": _photo_urls(producto),
         "shipping": _shipping_block(producto.precio_final or Decimal("0")),
-        "sale_terms": _sale_terms_block(),
+        "sale_terms": _sale_terms_block(producto),
         "attributes": attributes,
         "status": initial_status,
         # seller_custom_field: alias top-level usado por ML para identificar el
@@ -1096,7 +1122,8 @@ def build_matrix_payload(
         # Las fotos a nivel item son la unión de todas las variantes
         "pictures": item_pictures,
         "shipping": _shipping_block(master.precio_final or Decimal("0")),
-        "sale_terms": _sale_terms_block(),
+        # Para matriz, el sale_term de MANUFACTURING_TIME se toma del master.
+        "sale_terms": _sale_terms_block(master),
         "attributes": item_attrs,
         "status": initial_status,
         "variations": variations_block,

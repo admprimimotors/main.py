@@ -1,0 +1,7 @@
+{
+  "domain_id_default": "MLA-CARS_AND_VANS",
+  "min_products_per_item": 2,
+  "max_products_per_item": 5,
+  "max_modelos_por_titulo": 3,
+  "_notas": "Configuración PRIMI MOTORS para autopartes Argentina. domain_id_default es para autos/camionetas. Para camiones cambiar a MLA-TRUCKS, para motos a MLA-MOTORCYCLES."
+}

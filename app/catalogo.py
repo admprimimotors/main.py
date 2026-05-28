@@ -88,6 +88,15 @@ PRODUCTO_COL_ALIASES: dict[str, str] = {
     "categoria_id_ml": "ml_category_id",
     "id_categoria_ml": "ml_category_id",
     "category_id_ml": "ml_category_id",
+    # Días de disponibilidad / tiempo de fabricación. Si está seteado en el
+    # Excel, al publicar en ML se manda como sale_term MANUFACTURING_TIME y
+    # la publicación muestra "Disponible en X días después de tu compra".
+    "dias_disponibilidad": "dias_disponibilidad",
+    "dias_disp": "dias_disponibilidad",
+    "disponibilidad_dias": "dias_disponibilidad",
+    "tiempo_fabricacion": "dias_disponibilidad",
+    "manufacturing_time": "dias_disponibilidad",
+    "dias_para_despachar": "dias_disponibilidad",
     # URLs de fotos. Aceptamos varios separadores en la celda (`;`, `,`, `\n`).
     # No van a ficha_tecnica — se procesan post-upsert para crear FotoProducto.
     "fotos": "fotos_urls",
@@ -376,6 +385,10 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             "ml_category_id": _parse_str(_g("ml_category_id")),
             "ml_envio_fijo": _parse_decimal(_g("ml_envio_fijo")),
             "ml_impuestos_pct": _parse_decimal(_g("ml_impuestos_pct")),
+            # Si en el Excel viene un número (3, 5, 10, etc.), se publica en
+            # ML como MANUFACTURING_TIME. Si viene vacío, queda NULL y no se
+            # envía nada (default: "Llega mañana" si hay stock).
+            "dias_disponibilidad": _parse_int(_g("dias_disponibilidad")),
         })
 
     if not rows:
@@ -408,6 +421,7 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
         "ml_category_id": "ml_category_id" in field_to_col,
         "ml_envio_fijo": "ml_envio_fijo" in field_to_col,
         "ml_impuestos_pct": "ml_impuestos_pct" in field_to_col,
+        "dias_disponibilidad": "dias_disponibilidad" in field_to_col,
     }
 
     # UPSERT por chunks (Postgres limita a ~32K parámetros por statement)
@@ -1741,6 +1755,10 @@ def exportar_catalogo_xlsx(
             "ML_Precio": float(p.ml_precio) if p.ml_precio is not None else None,
             "ML_Envio_Fijo": float(p.ml_envio_fijo) if p.ml_envio_fijo is not None else None,
             "ML_Impuestos_Pct": float(p.ml_impuestos_pct) if p.ml_impuestos_pct is not None else None,
+            # Tiempo de fabricación / disponibilidad para ML (sale_term MANUFACTURING_TIME).
+            # Si está seteado y el producto se publica/republica, ML muestra
+            # "Disponible en X días después de tu compra".
+            "dias_disponibilidad": p.dias_disponibilidad if p.dias_disponibilidad is not None else None,
             "Fotos": "; ".join(f.url for f in (p.fotos or []) if f.url),
             "Compat_Count": len(p.compatibilidades or []),
         }

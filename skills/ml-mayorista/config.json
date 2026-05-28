@@ -1,0 +1,10 @@
+{
+  "tiers": [
+    {"min_qty": 2, "discount_pct": 6},
+    {"min_qty": 4, "discount_pct": 10},
+    {"min_qty": 6, "discount_pct": 15}
+  ],
+  "currency": "ARS",
+  "max_tiers_ml": 5,
+  "_notas": "Configuración PRIMI MOTORS. Editar tiers para cambiar escalones. ML soporta hasta 5."
+}

@@ -1,0 +1,353 @@
+{% extends "base.html" %}
+{% block title %}Buscar categoría ML · Primi Motors{% endblock %}
+{% block page_title %}Buscar categoría Mercado Libre{% endblock %}
+
+{% block content %}
+<style>
+  .bc-wrap { max-width: 920px; }
+
+  .bc-card {
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 18px;
+  }
+  .bc-card h2 {
+    font-size: 14px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin: 0 0 14px;
+    font-weight: 600;
+  }
+
+  .bc-form {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .bc-form input[type=text] {
+    flex: 1 1 320px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 11px 14px;
+    font-size: 14px;
+  }
+  .bc-form input[type=text]:focus {
+    outline: none;
+    border-color: var(--brand-hover);
+  }
+  .bc-form button {
+    background: var(--brand);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 11px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .bc-form button:hover { background: var(--brand-hover); }
+  .bc-form button:disabled { opacity: .55; cursor: not-allowed; }
+
+  .bc-hint {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 10px;
+    line-height: 1.6;
+  }
+  .bc-hint code {
+    background: var(--panel-2);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--brand-hover);
+    font-size: 11px;
+  }
+
+  .bc-status {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin: 14px 0;
+    display: none;
+  }
+  .bc-status.show { display: block; }
+  .bc-status.info {
+    background: rgba(160,25,22,.08);
+    border: 1px solid rgba(160,25,22,.30);
+    color: #fca5a5;
+  }
+  .bc-status.error {
+    background: rgba(239,68,68,.10);
+    border: 1px solid rgba(239,68,68,.40);
+    color: #fca5a5;
+  }
+
+  .bc-results { margin-top: 6px; }
+
+  .bc-result {
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+  }
+  .bc-result.best {
+    border-color: rgba(160,25,22,.60);
+    background: linear-gradient(180deg, rgba(160,25,22,.06), var(--panel-2));
+  }
+  .bc-result .row1 {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .bc-result .badge {
+    background: var(--brand);
+    color: white;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+  }
+  .bc-result .cat-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .bc-result .cat-id {
+    background: #0b0b0b;
+    border: 1px solid var(--border);
+    color: var(--brand-hover);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .bc-result .copy-btn {
+    background: var(--panel);
+    color: var(--muted-strong);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all .12s;
+  }
+  .bc-result .copy-btn:hover {
+    color: var(--text);
+    border-color: var(--brand-hover);
+  }
+  .bc-result .copy-btn.copied {
+    color: var(--success);
+    border-color: var(--success);
+  }
+  .bc-result .ruta {
+    color: var(--muted-strong);
+    font-size: 13px;
+    margin-top: 8px;
+    line-height: 1.6;
+  }
+  .bc-result .ruta .sep {
+    color: var(--muted);
+    margin: 0 6px;
+  }
+  .bc-result .meta {
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 6px;
+  }
+
+  .bc-spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--brand-hover);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .bc-recent {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .bc-recent .chip {
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    color: var(--muted-strong);
+    padding: 4px 10px;
+    border-radius: 14px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all .12s;
+  }
+  .bc-recent .chip:hover {
+    color: var(--text);
+    border-color: var(--brand-hover);
+  }
+</style>
+
+<div class="bc-wrap">
+
+  <div class="bc-card">
+    <h2>Buscar categoría</h2>
+    <form class="bc-form" id="bc-form" autocomplete="off">
+      <input type="text" id="bc-q" name="q"
+             placeholder="ej.: bujía de precalentamiento, filtro de aceite, amortiguador delantero..."
+             required />
+      <button type="submit" id="bc-submit">Buscar</button>
+    </form>
+    <div class="bc-hint">
+      Devuelve el <strong>ID de categoría MLA</strong> (para pegar en la planilla
+      masiva) y la ruta completa de Mercado Libre Argentina. Consulta en vivo a
+      <code>api.mercadolibre.com</code>.
+    </div>
+    <div class="bc-recent" id="bc-recent"></div>
+  </div>
+
+  <div id="bc-status" class="bc-status"></div>
+
+  <div class="bc-results" id="bc-results"></div>
+
+</div>
+
+<script>
+(function () {
+  const form = document.getElementById('bc-form');
+  const input = document.getElementById('bc-q');
+  const submitBtn = document.getElementById('bc-submit');
+  const statusEl = document.getElementById('bc-status');
+  const resultsEl = document.getElementById('bc-results');
+  const recentEl = document.getElementById('bc-recent');
+
+  const RECENT_KEY = 'pm_buscar_cat_recent';
+
+  function getRecent() {
+    try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); }
+    catch { return []; }
+  }
+  function pushRecent(q) {
+    let arr = getRecent().filter(x => x.toLowerCase() !== q.toLowerCase());
+    arr.unshift(q);
+    arr = arr.slice(0, 8);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(arr));
+    renderRecent();
+  }
+  function renderRecent() {
+    const arr = getRecent();
+    recentEl.innerHTML = '';
+    if (!arr.length) return;
+    arr.forEach(q => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = q;
+      chip.addEventListener('click', () => { input.value = q; doSearch(q); });
+      recentEl.appendChild(chip);
+    });
+  }
+  renderRecent();
+
+  function showStatus(msg, kind) {
+    statusEl.className = 'bc-status show ' + (kind || 'info');
+    statusEl.innerHTML = msg;
+  }
+  function clearStatus() {
+    statusEl.className = 'bc-status';
+    statusEl.innerHTML = '';
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
+    );
+  }
+
+  function renderResults(items) {
+    resultsEl.innerHTML = '';
+    if (!items || !items.length) {
+      showStatus('No se encontró ninguna categoría para ese término.', 'error');
+      return;
+    }
+    clearStatus();
+    items.forEach((it, idx) => {
+      const div = document.createElement('div');
+      div.className = 'bc-result' + (idx === 0 ? ' best' : '');
+      const ruta = (it.path_from_root || [])
+        .map(p => `<span>${escapeHtml(p.name)}</span>`)
+        .join('<span class="sep">›</span>');
+      div.innerHTML = `
+        <div class="row1">
+          ${idx === 0 ? '<span class="badge">SUGERIDA</span>' : ''}
+          <span class="cat-name">${escapeHtml(it.category_name)}</span>
+          <span class="cat-id" data-id="${escapeHtml(it.category_id)}">${escapeHtml(it.category_id)}</span>
+          <button class="copy-btn" data-copy="${escapeHtml(it.category_id)}">Copiar ID</button>
+        </div>
+        <div class="ruta">${ruta || '<em>(sin ruta disponible)</em>'}</div>
+        <div class="meta">Dominio: ${escapeHtml(it.domain_name || it.domain_id || '—')}</div>
+      `;
+      resultsEl.appendChild(div);
+    });
+    // bind copy buttons
+    resultsEl.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.copy;
+        try {
+          await navigator.clipboard.writeText(id);
+          const original = btn.textContent;
+          btn.textContent = '✓ Copiado';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = original;
+            btn.classList.remove('copied');
+          }, 1500);
+        } catch (e) {
+          alert('No se pudo copiar. ID: ' + id);
+        }
+      });
+    });
+  }
+
+  async function doSearch(q) {
+    q = (q || '').trim();
+    if (!q) return;
+    resultsEl.innerHTML = '';
+    submitBtn.disabled = true;
+    showStatus('<span class="bc-spinner"></span>Buscando en Mercado Libre…', 'info');
+    try {
+      const url = '/api/ml/categorias/buscar?q=' + encodeURIComponent(q);
+      const resp = await fetch(url, { credentials: 'same-origin' });
+      if (!resp.ok) {
+        const t = await resp.text();
+        showStatus('Error de la API (' + resp.status + '): ' + escapeHtml(t.slice(0, 200)), 'error');
+        return;
+      }
+      const data = await resp.json();
+      renderResults(data.results || []);
+      pushRecent(q);
+    } catch (e) {
+      showStatus('Error de red: ' + escapeHtml(e.message || String(e)), 'error');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  }
+
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    doSearch(input.value);
+  });
+
+  input.focus();
+})();
+</script>
+{% endblock %}
