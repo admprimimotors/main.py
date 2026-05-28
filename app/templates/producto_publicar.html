@@ -107,6 +107,27 @@
 </div>
 {% endif %}
 
+{% if publicaciones_existentes %}
+<div class="alert" style="background: rgba(160,25,22,.08); border: 1px solid rgba(160,25,22,.30); color: #fca5a5; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px;">
+  <strong>Este SKU ya tiene {{ publicaciones_existentes|length }} publicación{% if publicaciones_existentes|length > 1 %}es{% endif %} en ML.</strong>
+  Si continuás, se va a crear <strong>una nueva</strong> publicación adicional
+  (útil para FULL + tradicional, catálogo + libre, distintas categorías o
+  títulos distintos para A/B). El stock se comparte entre todas en F1.
+  <ul style="margin: 8px 0 0 20px; font-size: 12px; line-height: 1.7; color: var(--muted-strong);">
+    {% for pub in publicaciones_existentes %}
+    <li>
+      <code style="background: var(--panel-2); padding: 1px 6px; border-radius: 3px; color: var(--brand-hover);">{{ pub.ml_item_id }}</code>
+      · status: {{ pub.ml_status or '?' }}
+      {% if pub.ml_listing_type %} · {{ pub.ml_listing_type }}{% endif %}
+      {% if pub.ml_shipping_mode %} · envío {{ pub.ml_shipping_mode }}{% endif %}
+      {% if pub.ml_catalog_listing %} · catálogo{% endif %}
+      {% if pub.ml_permalink %} · <a href="{{ pub.ml_permalink }}" target="_blank" rel="noopener" style="color: var(--brand-hover);">ver en ML ↗</a>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 {% if es_matriz %}
 <div class="alert" style="background: rgba(59,130,246,.10); border-color: rgba(59,130,246,.40); color: #93c5fd;">
   <strong>Publicación con variantes detectada:</strong> hay

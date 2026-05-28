@@ -39,7 +39,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from . import ml_client
+from . import ml_client, publicaciones_ml
 from .models import CategoriaMLMapping, Producto
 
 
@@ -840,11 +840,10 @@ def create_publication(
     ).scalar_one_or_none()
     if prod is None:
         return False, f"SKU '{sku}' no existe", None
-    if prod.ml_item_id:
-        return False, (
-            f"El producto ya está publicado (item_id={prod.ml_item_id}). "
-            "Si querés actualizarlo usá Push a ML."
-        ), None
+    # Antes bloqueábamos si producto.ml_item_id != NULL. Ahora soportamos
+    # 1 SKU = N publicaciones ML (FULL + tradicional, catálogo + libre,
+    # distintas categorías, etc.), así que el chequeo se removió. Cada llamada
+    # a create_publication() agrega una nueva fila a producto_publicaciones_ml.
 
     # Resolver categoría:
     #   1. Override explícito del caller (ej UI confirm)
@@ -977,18 +976,43 @@ def create_publication(
             f"⚠ ML descartó {pics_droppeadas} de {sent_pics} foto(s) (URL no descargable)"
         )
 
-    # Persistimos los identificadores en el producto local
-    prod.ml_item_id = new_id
-    prod.ml_permalink = resp.get("permalink")
-    prod.ml_status = resp.get("status")
-    prod.ml_stock = resp.get("available_quantity")
-    if resp.get("price") is not None:
-        try:
-            prod.ml_precio = Decimal(str(resp.get("price")))
-        except Exception:
-            pass
-    # Snapshot de los atributos como ML los devolvió (ya con value_id resueltos)
-    prod.ml_raw_attributes = resp.get("attributes") or []
+    # Persistencia: la tabla nueva `producto_publicaciones_ml` es la fuente
+    # de verdad. Por compat con código legacy, también espejamos el primer
+    # ml_item_id en Producto (queda como "primary publication" hasta que
+    # migremos completamente).
+    try:
+        ml_precio_dec = Decimal(str(resp.get("price"))) if resp.get("price") is not None else None
+    except Exception:
+        ml_precio_dec = None
+
+    shipping_info = resp.get("shipping") if isinstance(resp.get("shipping"), dict) else {}
+    publicaciones_ml.create_publicacion(
+        db,
+        producto_id=prod.id,
+        ml_item_id=new_id,
+        ml_permalink=resp.get("permalink"),
+        ml_status=resp.get("status"),
+        ml_category_id=resp.get("category_id") or ml_cat_id,
+        ml_listing_type=resp.get("listing_type_id"),
+        ml_shipping_mode=shipping_info.get("mode"),
+        ml_catalog_listing=bool(resp.get("catalog_listing")),
+        ml_titulo=resp.get("title"),
+        ml_precio=ml_precio_dec,
+        ml_stock_snapshot=resp.get("available_quantity"),
+        ml_raw_attributes=resp.get("attributes") or [],
+        commit=False,  # commit lo hace el caller al final
+    )
+
+    # Compat legacy: solo seteamos los ml_* del Producto si todavía está vacío
+    # (primera publicación). Las siguientes no pisan los snapshots de la primera.
+    if not prod.ml_item_id:
+        prod.ml_item_id = new_id
+        prod.ml_permalink = resp.get("permalink")
+        prod.ml_status = resp.get("status")
+        prod.ml_stock = resp.get("available_quantity")
+        if ml_precio_dec is not None:
+            prod.ml_precio = ml_precio_dec
+        prod.ml_raw_attributes = resp.get("attributes") or []
 
     # Descripción: PUT separado a /items/{id}/description.
     # Si falla no es fatal — la publicación ya existe, podemos reintentar después.
@@ -1325,16 +1349,42 @@ def create_matrix_publication(
                 medida_to_var_id[val_name] = mv.get("id")
                 break
 
-    # Persistir en cada variante
+    # Persistir cada variante:
+    #   - INSERT en producto_publicaciones_ml (fuente de verdad)
+    #   - Compat legacy: setear producto.ml_item_id/ml_variation_id/etc si están NULL
+    shipping_info = resp.get("shipping") if isinstance(resp.get("shipping"), dict) else {}
     for v in variants:
-        v.ml_item_id = new_item_id
-        v.ml_permalink = resp.get("permalink")
-        v.ml_status = resp.get("status")
         medida = _get_medida_from_ficha(v).strip().lower()
-        v.ml_variation_id = medida_to_var_id.get(medida)
-        v.ml_stock = v.stock_actual
-        if v.precio_final is not None:
-            v.ml_precio = v.precio_final
+        var_id = medida_to_var_id.get(medida)
+        try:
+            precio_dec = Decimal(str(v.precio_final)) if v.precio_final is not None else None
+        except Exception:
+            precio_dec = None
+        publicaciones_ml.create_publicacion(
+            db,
+            producto_id=v.id,
+            ml_item_id=new_item_id,
+            ml_variation_id=var_id,
+            ml_permalink=resp.get("permalink"),
+            ml_status=resp.get("status"),
+            ml_category_id=resp.get("category_id") or ml_cat_id,
+            ml_listing_type=resp.get("listing_type_id"),
+            ml_shipping_mode=shipping_info.get("mode"),
+            ml_catalog_listing=bool(resp.get("catalog_listing")),
+            ml_titulo=resp.get("title") or master.titulo,
+            ml_precio=precio_dec,
+            ml_stock_snapshot=v.stock_actual,
+            commit=False,
+        )
+        # Compat legacy: solo si todavía no estaba publicada
+        if not v.ml_item_id:
+            v.ml_item_id = new_item_id
+            v.ml_permalink = resp.get("permalink")
+            v.ml_status = resp.get("status")
+            v.ml_variation_id = var_id
+            v.ml_stock = v.stock_actual
+            if v.precio_final is not None:
+                v.ml_precio = v.precio_final
 
     # Cache de mapping de categoría si hay nuestra_categoria + venía de predict
     if master.categoria and not ml_category_id_override:

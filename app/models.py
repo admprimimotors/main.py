@@ -168,6 +168,10 @@ class Producto(Base):
         back_populates="producto",
         cascade="all, delete-orphan",
     )
+    publicaciones_ml: Mapped[list["ProductoPublicacionML"]] = relationship(
+        back_populates="producto",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         # Índice GIN sobre JSONB → permite queries tipo:
@@ -178,6 +182,96 @@ class Producto(Base):
 
     def __repr__(self) -> str:
         return f"<Producto sku={self.sku!r} titulo={self.titulo!r}>"
+
+
+# =============================================================
+# Publicaciones ML (1 producto → N publicaciones)
+# =============================================================
+#
+# Antes el modelo era 1:1 — Producto.ml_item_id, ml_status, ml_stock, etc.
+# vivían directo en la fila de productos. Eso limita: no podés tener la misma
+# pieza publicada como FULL y tradicional, ni en dos categorías, ni con dos
+# títulos para A/B testear.
+#
+# Ahora cada Producto puede tener N publicaciones en ML, cada una con su
+# propia identidad (ml_item_id), categoría, listing_type, shipping_mode,
+# título, precio y stock asignado. En F1 el stock se considera compartido
+# (push el del producto a todas las publicaciones); F2 va a usar el
+# `ml_stock_asignado` por publicación para asignación manual.
+#
+# Compat: durante la transición seguimos manteniendo Producto.ml_item_id /
+# ml_status / ml_stock / ml_precio como "cache de la primera publicación"
+# para no romper queries legacy. La tabla nueva es la fuente de verdad.
+
+class ProductoPublicacionML(Base):
+    __tablename__ = "producto_publicaciones_ml"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    producto_id: Mapped[int] = mapped_column(
+        ForeignKey("productos.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # ID de ML — único en toda la base. NULL solo durante la creación, después
+    # se llena con el id devuelto por POST /items.
+    ml_item_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    # ID de variation dentro de la publicación (solo para items con variations[]).
+    ml_variation_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    ml_permalink: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # Status reportado por ML (active, paused, closed, under_review, etc.).
+    ml_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    # Categoría con la que se publicó (puede diferir entre publicaciones del
+    # mismo producto — caso "publicado en 2 categorías").
+    ml_category_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # listing_type_id: "gold_special" (clásica), "gold_pro" (premium), "free".
+    # Define costo de comisión y duración.
+    ml_listing_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # shipping_mode: "me2" (MercadoEnvíos), "custom" (a coordinar), "not_specified".
+    # `me2` + `tags=[fulfillment]` = FULL.
+    ml_shipping_mode: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # True si la publicación está linkeada al catálogo de ML (sale en la
+    # ficha técnica oficial del producto).
+    ml_catalog_listing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Título de esta publicación específicamente. Puede ser distinto del
+    # `producto.titulo` (caso A/B test de SEO). NULL → usa el del producto.
+    ml_titulo: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Precio de esta publicación. Puede diferir del producto.precio_final.
+    ml_precio: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    # Stock asignado a esta publicación (F2). En F1 ignorado — push el del producto.
+    # NULL = "no asignación manual, se reparte el del producto".
+    ml_stock_asignado: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Stock que ML reporta actualmente (snapshot para detectar drift).
+    ml_stock_snapshot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Atributos crudos como ML los entrega (con value_id, value_struct, etc.).
+    # Necesarios para push correcto.
+    ml_raw_attributes: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    ml_last_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Auditoría
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    producto: Mapped["Producto"] = relationship(back_populates="publicaciones_ml")
+
+    __table_args__ = (
+        Index("ix_ppml_producto_status", "producto_id", "ml_status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PublicacionML {self.ml_item_id} producto_id={self.producto_id}>"
 
 
 # =============================================================

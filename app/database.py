@@ -177,6 +177,54 @@ def _apply_migrations() -> None:
         ADD COLUMN IF NOT EXISTS stock_updated_at TIMESTAMP WITH TIME ZONE
         """,
         "CREATE INDEX IF NOT EXISTS ix_productos_stock_updated_at ON productos(stock_updated_at DESC)",
+        # v16 (2026-05-28): tabla producto_publicaciones_ml para soportar 1 SKU
+        # con N publicaciones ML (FULL+tradicional, catálogo+libre, 2 categorías,
+        # 2 títulos, etc.). create_all() la crea también — esta migración la
+        # define explícita y backfilea las publicaciones existentes.
+        """
+        CREATE TABLE IF NOT EXISTS producto_publicaciones_ml (
+            id SERIAL PRIMARY KEY,
+            producto_id INTEGER NOT NULL REFERENCES productos(id) ON DELETE CASCADE,
+            ml_item_id VARCHAR(64) NOT NULL UNIQUE,
+            ml_variation_id VARCHAR(64),
+            ml_permalink VARCHAR(512),
+            ml_status VARCHAR(20),
+            ml_category_id VARCHAR(64),
+            ml_listing_type VARCHAR(40),
+            ml_shipping_mode VARCHAR(40),
+            ml_catalog_listing BOOLEAN NOT NULL DEFAULT FALSE,
+            ml_titulo VARCHAR(500),
+            ml_precio NUMERIC(12, 2),
+            ml_stock_asignado INTEGER,
+            ml_stock_snapshot INTEGER,
+            ml_raw_attributes JSONB,
+            ml_last_synced_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_ppml_producto_id ON producto_publicaciones_ml(producto_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ppml_ml_item_id ON producto_publicaciones_ml(ml_item_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ppml_ml_variation_id ON producto_publicaciones_ml(ml_variation_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ppml_ml_status ON producto_publicaciones_ml(ml_status)",
+        "CREATE INDEX IF NOT EXISTS ix_ppml_producto_status ON producto_publicaciones_ml(producto_id, ml_status)",
+        # Backfill: copiar la "publicación primaria" de cada Producto con
+        # ml_item_id != NULL a la tabla nueva. Idempotente: ON CONFLICT DO NOTHING
+        # respeta filas ya existentes (si esta migración se corrió antes).
+        """
+        INSERT INTO producto_publicaciones_ml (
+            producto_id, ml_item_id, ml_variation_id, ml_permalink, ml_status,
+            ml_category_id, ml_precio, ml_stock_snapshot, ml_raw_attributes,
+            ml_last_synced_at
+        )
+        SELECT
+            id, ml_item_id, ml_variation_id, ml_permalink, ml_status,
+            ml_category_id, ml_precio, ml_stock, ml_raw_attributes,
+            ml_last_synced_at
+        FROM productos
+        WHERE ml_item_id IS NOT NULL
+        ON CONFLICT (ml_item_id) DO NOTHING
+        """,
         # v17 (2026-05-27): snapshots de precios ML para construir histórico.
         # ML no expone historial vía API — lo armamos con capturas periódicas.
         """

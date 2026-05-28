@@ -39,6 +39,7 @@ from . import (
     notas_credito,
     precios,
     publicaciones,
+    publicaciones_ml,
     remitos,
     stock,
     storage,
@@ -46,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.46.1"
+APP_VERSION = "0.47.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -2295,15 +2296,13 @@ def catalogo_publicar_form(
         }
         return RedirectResponse("/catalogo", status_code=303)
 
-    if prod.ml_item_id:
-        request.session["flash"] = {
-            "type": "warning",
-            "msg": (
-                f"Este producto ya está publicado en ML como {prod.ml_item_id}. "
-                "Para actualizarlo usá Push a ML."
-            ),
-        }
-        return RedirectResponse(f"/catalogo/{sku}", status_code=303)
+    # NOTA: antes acá había un bloqueo que redireccionaba si producto.ml_item_id
+    # no era NULL. Lo sacamos porque ahora soportamos N publicaciones por SKU
+    # (FULL + tradicional, catálogo + libre, distintas categorías, distintos
+    # títulos). Cada vez que el usuario abre /publicar para un SKU ya publicado
+    # estamos preparando una publicación adicional. La lista de las ya creadas
+    # se muestra como banner informativo más abajo en el template.
+    publicaciones_existentes = publicaciones_ml.list_by_producto(db, prod.id)
 
     # Resolver categoría:
     #   1. ml_category_id seteado en el producto (desde el Excel)
@@ -2358,6 +2357,7 @@ def catalogo_publicar_form(
             "other_checks_pass": other_checks_pass,
             "variantes": variantes,
             "es_matriz": es_matriz,
+            "publicaciones_existentes": publicaciones_existentes,
             "ml_write_enabled": ml_client.is_write_enabled(),
             "default_listing_type": ml_publisher.DEFAULT_LISTING_TYPE,
             "default_initial_status": ml_publisher.DEFAULT_INITIAL_STATUS,
@@ -2590,9 +2590,15 @@ def publicaciones_list(
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
-    """Lista de publicaciones ML con filtros + stats + acciones masivas."""
+    """
+    Lista de publicaciones ML con filtros + stats + acciones masivas.
+
+    Post-refactor F1: usa publicaciones_ml.list_publicaciones (tabla nueva,
+    1 fila por publicación). Si un SKU tiene 2 publicaciones en ML, aparecen
+    como 2 filas distintas en la tabla, cada una con su ml_item_id.
+    """
     try:
-        rows, total, stats = publicaciones.list_publicaciones(
+        rows, total, stats = publicaciones_ml.list_publicaciones(
             db,
             search=q,
             status=status,

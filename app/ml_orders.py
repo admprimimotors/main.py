@@ -30,7 +30,7 @@ from sqlalchemy import select, func as sql_func
 from sqlalchemy.orm import Session
 
 from . import ml_client
-from .models import MLOrder, Producto
+from .models import MLOrder, Producto, ProductoPublicacionML
 
 
 # Estados de orden que descuentan stock
@@ -73,24 +73,49 @@ def _resolve_producto(
     ml_item_id: str,
     ml_variation_id: Optional[str],
 ) -> Optional[Producto]:
-    """Match producto local por ml_item_id + variation. Si hay variation,
-    matchea exacto; si no, toma el producto sin variation_id."""
-    q = select(Producto).where(Producto.ml_item_id == ml_item_id)
+    """
+    Match producto local por ml_item_id + variation.
+
+    Estrategia post-refactor (F1, 1 SKU = N publicaciones):
+      1. Buscar la publicación en `producto_publicaciones_ml` por ml_item_id
+         (con variation si la orden la trae). De ahí ir al producto.
+      2. Fallback legacy: si la publicación no está en la tabla nueva
+         (caso raro, no se migró), caer al lookup viejo por Producto.ml_item_id.
+    """
+    # Path nuevo: la fuente de verdad es producto_publicaciones_ml
+    q = select(ProductoPublicacionML).where(
+        ProductoPublicacionML.ml_item_id == ml_item_id
+    )
     if ml_variation_id:
-        q = q.where(Producto.ml_variation_id == ml_variation_id)
+        pub = db.execute(
+            q.where(ProductoPublicacionML.ml_variation_id == ml_variation_id)
+        ).scalar_one_or_none()
     else:
-        # Cuando la orden NO trae variation, buscamos por item sin variation
-        # (publicación simple) — pero si no hay match, fallback al que sea.
-        prod = db.execute(
-            q.where(Producto.ml_variation_id.is_(None))
+        # Orden sin variation: preferimos la fila sin variation_id; si no
+        # hay, tomamos cualquier publicación con ese ml_item_id.
+        pub = db.execute(
+            q.where(ProductoPublicacionML.ml_variation_id.is_(None))
         ).scalar_one_or_none()
-        if prod is not None:
-            return prod
-        # Fallback: cualquier producto con ese ml_item_id
+        if pub is None:
+            pub = db.execute(q).scalars().first()
+    if pub is not None:
         return db.execute(
-            select(Producto).where(Producto.ml_item_id == ml_item_id).limit(1)
+            select(Producto).where(Producto.id == pub.producto_id)
         ).scalar_one_or_none()
-    return db.execute(q).scalar_one_or_none()
+
+    # Fallback legacy (Producto.ml_item_id) — pre-migración o casos huérfanos
+    legacy_q = select(Producto).where(Producto.ml_item_id == ml_item_id)
+    if ml_variation_id:
+        legacy_q = legacy_q.where(Producto.ml_variation_id == ml_variation_id)
+        return db.execute(legacy_q).scalar_one_or_none()
+    prod = db.execute(
+        legacy_q.where(Producto.ml_variation_id.is_(None))
+    ).scalar_one_or_none()
+    if prod is not None:
+        return prod
+    return db.execute(
+        select(Producto).where(Producto.ml_item_id == ml_item_id).limit(1)
+    ).scalar_one_or_none()
 
 
 def _process_order_item(

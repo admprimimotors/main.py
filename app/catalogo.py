@@ -2268,6 +2268,51 @@ def push_to_ml(
         except ml_client.MLClientError as e:
             errors.append(f"atributos fallaron: {e}")
 
+    # F1: replicar stock + precio a las publicaciones SECUNDARIAS de este SKU.
+    # En F1 el stock es compartido (todas las publicaciones del mismo producto
+    # muestran el mismo número). F2 va a usar ml_stock_asignado por publicación.
+    # Solo stock y precio se replican (descripción/título/atributos/fotos pueden
+    # ser distintos entre publicaciones — eso es PARTE del valor de tener N).
+    if "stock" in actions or "precio" in actions:
+        from . import publicaciones_ml as _pub_ml
+        secundarias = [
+            p for p in _pub_ml.list_by_producto(db, prod.id)
+            if p.ml_item_id and p.ml_item_id != prod.ml_item_id
+        ]
+        if secundarias:
+            ok_extras = 0
+            for pub in secundarias:
+                pushed_something = False
+                if "stock" in actions:
+                    try:
+                        ml_client.update_item_stock(db, pub.ml_item_id, prod.stock_actual)
+                        pub.ml_stock_snapshot = prod.stock_actual
+                        pushed_something = True
+                        if (
+                            auto_activate
+                            and prod.stock_actual > 0
+                            and pub.ml_status in ("paused", "inactive")
+                        ):
+                            try:
+                                ml_client.update_item_status(db, pub.ml_item_id, "active")
+                                pub.ml_status = "active"
+                            except ml_client.MLClientError:
+                                pass
+                    except ml_client.MLClientError as e:
+                        errors.append(f"{pub.ml_item_id} stock: {str(e)[:100]}")
+                if "precio" in actions and prod.precio_final is not None:
+                    try:
+                        ml_client.update_item_price(db, pub.ml_item_id, prod.precio_final)
+                        pub.ml_precio = prod.precio_final
+                        pushed_something = True
+                    except ml_client.MLClientError as e:
+                        errors.append(f"{pub.ml_item_id} precio: {str(e)[:100]}")
+                if pushed_something:
+                    pub.ml_last_synced_at = datetime.now(timezone.utc)
+                    ok_extras += 1
+            if ok_extras:
+                msgs.append(f"+{ok_extras} pub. extra{'s' if ok_extras != 1 else ''}")
+
     if msgs:
         prod.ml_last_synced_at = datetime.now(timezone.utc)
     db.commit()
