@@ -47,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.49.0"
+APP_VERSION = "0.50.1"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -347,6 +347,8 @@ def api_ml_orders_sync(
     from datetime import datetime, timezone as _tz
     _AUTO_SYNC_LAST_AT["at"] = datetime.now(_tz.utc)
     return JSONResponse({"ok": True, "summary": summary})
+
+
 
 
 # ===============================================================
