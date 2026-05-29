@@ -133,6 +133,12 @@ COMPAT_COL_ALIASES: dict[str, str] = {
     "cilindrada": "cilindrada_cc",
     "cilindrada_cc": "cilindrada_cc",
     "displacement": "cilindrada_cc",
+    # Cilindrada en litros (formato proveedor: 2.0, 2.2, 5.0) → se convierte
+    # a cc multiplicando por 1000.
+    "ltr": "cilindrada_litros",
+    "litros": "cilindrada_litros",
+    "litros_motor": "cilindrada_litros",
+    "lts": "cilindrada_litros",
     "anio_desde": "anio_desde",
     "ano_desde": "anio_desde",
     "year_from": "anio_desde",
@@ -142,9 +148,83 @@ COMPAT_COL_ALIASES: dict[str, str] = {
     "anio": "anio",  # un solo año → se aplica a desde y hasta
     "ano": "anio",
     "year": "anio",
+    # Rango de fechas formato MM.YY o MM.YY-MM.YY (formato proveedor).
+    # Se parsea en el processor a anio_desde/anio_hasta.
+    "fecha": "rango_fechas",
+    "fechas": "rango_fechas",
+    "rango_fechas": "rango_fechas",
+    "rango": "rango_fechas",
+    # Potencia CV (no es campo del modelo Vehiculo, se guarda en notas).
+    "cv": "potencia_cv",
+    "hp": "potencia_cv",
+    "potencia": "potencia_cv",
+    "potencia_cv": "potencia_cv",
     "notas": "notas",
     "notes": "notas",
 }
+
+
+def _litros_a_cc(val: Any) -> Optional[int]:
+    """Convierte cilindrada en litros (2.0, 2.2, 5.0) a cc (2000, 2200, 5000)."""
+    if _is_blank(val):
+        return None
+    try:
+        litros = float(str(val).strip().replace(",", "."))
+        if litros <= 0:
+            return None
+        return int(round(litros * 1000))
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_fecha_compat(val: Any) -> tuple[Optional[int], Optional[int]]:
+    """
+    Parsea el formato de fechas del proveedor:
+      "11.25"        → (2025, 2025)      ← un solo año, mes.año
+      "03.06-08.12"  → (2006, 2012)      ← rango mes_desde.año_desde - mes_hasta.año_hasta
+      "10.06-"       → (2006, None)      ← desde 2006, vigente
+      "-03.10"       → (None, 2010)      ← hasta 2010, sin desde definido
+      "2010-2015"    → (2010, 2015)      ← formato año completo también soportado
+      "2018"         → (2018, 2018)      ← un solo año completo
+
+    YY se interpreta como 20YY (asumimos siglo XXI). Para años de los 90 que el
+    usuario quiera cargar, mejor que escriba el año completo (4 dígitos).
+    """
+    if _is_blank(val):
+        return (None, None)
+    s = str(val).strip()
+    if not s:
+        return (None, None)
+
+    def _parse_token(token: str) -> Optional[int]:
+        token = token.strip()
+        if not token:
+            return None
+        # "11.25" o "03.06" → tomamos lo que está después del punto como año
+        if "." in token:
+            parts = token.split(".")
+            if len(parts) >= 2:
+                anio_str = parts[-1].strip()
+            else:
+                anio_str = token
+        else:
+            anio_str = token
+        try:
+            anio_int = int(anio_str)
+        except ValueError:
+            return None
+        # YY < 100 → asume 20YY (siglo XXI). Si querés años viejos, escribí 4 dígitos.
+        if anio_int < 100:
+            anio_int = 2000 + anio_int
+        return anio_int
+
+    if "-" in s:
+        # Rango: "10.06-08.12" o "10.06-" o "-08.12" o "2010-2015"
+        left, right = s.split("-", 1)
+        return (_parse_token(left), _parse_token(right))
+    # Un solo valor
+    anio = _parse_token(s)
+    return (anio, anio)
 
 PAGE_SIZE = 50
 
@@ -617,7 +697,7 @@ def _process_compatibilidades_sheet(db: Session, df: pd.DataFrame, result: Uploa
         col = field_to_col.get(field)
         return row.get(col) if col else None
 
-    # Agrupar filas por SKU
+    # Agrupar filas por SKU (tal como vienen en el Excel, sin resolver todavía)
     sku_to_rows: dict[str, list[dict]] = {}
     for idx, row in df.iterrows():
         sku = _parse_str(_g(row, "sku"))
@@ -629,12 +709,30 @@ def _process_compatibilidades_sheet(db: Session, df: pd.DataFrame, result: Uploa
             result.errores.append(f"Compat fila {idx + 2}: marca o modelo vacío")
             continue
 
+        # Cilindrada: prioridad cc directo, después litros → cc
+        cilindrada_cc = _parse_int(_g(row, "cilindrada_cc"))
+        if cilindrada_cc is None:
+            cilindrada_cc = _litros_a_cc(_g(row, "cilindrada_litros"))
+
+        # Años: prioridad columnas explícitas (anio_desde / anio_hasta / anio),
+        # después intenta parsear el rango_fechas estilo "11.25" o "03.06-08.12".
         anio_desde = _parse_int(_g(row, "anio_desde"))
         anio_hasta = _parse_int(_g(row, "anio_hasta"))
         if anio_desde is None and anio_hasta is None:
             anio = _parse_int(_g(row, "anio"))
             if anio is not None:
                 anio_desde = anio_hasta = anio
+        if anio_desde is None and anio_hasta is None:
+            rng = _parse_str(_g(row, "rango_fechas"))
+            if rng:
+                anio_desde, anio_hasta = _parse_fecha_compat(rng)
+
+        # Notas: combinar notas + potencia_cv (si existe).
+        notas = _parse_str(_g(row, "notas")) or ""
+        potencia = _parse_str(_g(row, "potencia_cv"))
+        if potencia:
+            cv_note = f"{potencia} CV"
+            notas = (notas + " · " + cv_note).strip(" ·") if notas else cv_note
 
         sku_to_rows.setdefault(sku, []).append({
             "marca": marca,
@@ -642,43 +740,70 @@ def _process_compatibilidades_sheet(db: Session, df: pd.DataFrame, result: Uploa
             "combustible": _parse_str(_g(row, "combustible")),
             "cilindros": _parse_int(_g(row, "cilindros")),
             "valvulas": _parse_int(_g(row, "valvulas")),
-            "cilindrada_cc": _parse_int(_g(row, "cilindrada_cc")),
+            "cilindrada_cc": cilindrada_cc,
             "anio_desde": anio_desde,
             "anio_hasta": anio_hasta,
-            "notas": _parse_str(_g(row, "notas")),
+            "notas": notas or None,
         })
 
     if not sku_to_rows:
         return
 
-    # Mapear SKUs → IDs (un solo query, evita N+1)
-    skus = list(sku_to_rows.keys())
-    sku_to_id = dict(
-        db.execute(select(Producto.sku, Producto.id).where(Producto.sku.in_(skus))).all()
-    )
+    # Resolver cada SKU del Excel contra los productos del sistema:
+    #   1. Match exacto contra `producto.sku` → 1 producto destino
+    #   2. Match contra `producto.sku_ml` → TODOS los productos con ese sku_ml
+    #      (caso "GE100-A, GE100-B, GE100-C comparten sku_ml='GE100'", el
+    #      Excel de compats trae 'GE100' y se aplica a los 3).
+    # Un SKU puede matchear por las dos vías — si pasa, igual se aplica una vez
+    # a cada producto (deduplicación implícita por producto_id).
+    skus_excel = list(sku_to_rows.keys())
+    productos_por_sku: dict[str, list[int]] = {}
+    # Match directo
+    for s, pid in db.execute(
+        select(Producto.sku, Producto.id).where(Producto.sku.in_(skus_excel))
+    ).all():
+        productos_por_sku.setdefault(s, []).append(pid)
+    # Match por sku_ml
+    for sku_ml, pid in db.execute(
+        select(Producto.sku_ml, Producto.id).where(Producto.sku_ml.in_(skus_excel))
+    ).all():
+        if sku_ml and pid not in productos_por_sku.get(sku_ml, []):
+            productos_por_sku.setdefault(sku_ml, []).append(pid)
 
     cache: dict = {}
-    for sku, compats in sku_to_rows.items():
-        producto_id = sku_to_id.get(sku)
-        if producto_id is None:
-            result.errores.append(f"Compat: SKU '{sku}' no existe en productos")
+    productos_tocados: set[int] = set()
+    for sku_excel, compats in sku_to_rows.items():
+        producto_ids = productos_por_sku.get(sku_excel, [])
+        if not producto_ids:
+            result.errores.append(
+                f"Compat: SKU '{sku_excel}' no existe en productos "
+                f"(ni como SKU del sistema ni como SKU_ML)"
+            )
             continue
 
-        # Borrar compats viejas para este producto (Excel es source of truth)
-        db.query(ProductoCompatibilidad).filter(
-            ProductoCompatibilidad.producto_id == producto_id
-        ).delete(synchronize_session=False)
+        for producto_id in producto_ids:
+            # Borrar compats viejas para este producto solo la primera vez que lo
+            # tocamos en este upload (Excel es source of truth — si un mismo
+            # producto matchea por SKU y SKU_ML, no borramos las del primer paso).
+            if producto_id not in productos_tocados:
+                db.query(ProductoCompatibilidad).filter(
+                    ProductoCompatibilidad.producto_id == producto_id
+                ).delete(synchronize_session=False)
+                productos_tocados.add(producto_id)
 
-        for c in compats:
-            v, created = _get_or_create_vehiculo(db, cache=cache, **{k: v for k, v in c.items() if k != "notas"})
-            if created:
-                result.vehiculos_creados += 1
-            db.add(ProductoCompatibilidad(
-                producto_id=producto_id,
-                vehiculo_id=v.id,
-                notas=c["notas"],
-            ))
-            result.compats_creadas += 1
+            for c in compats:
+                v, created = _get_or_create_vehiculo(
+                    db, cache=cache,
+                    **{k: v for k, v in c.items() if k != "notas"},
+                )
+                if created:
+                    result.vehiculos_creados += 1
+                db.add(ProductoCompatibilidad(
+                    producto_id=producto_id,
+                    vehiculo_id=v.id,
+                    notas=c["notas"],
+                ))
+                result.compats_creadas += 1
 
     db.commit()
 
@@ -937,6 +1062,7 @@ def list_productos(
         productos.append({
             "id": prod.id,
             "sku": prod.sku,
+            "sku_ml": prod.sku_ml,
             "titulo": prod.titulo,
             "categoria": prod.categoria,
             "marca": prod.marca,

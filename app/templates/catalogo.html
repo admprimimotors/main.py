@@ -684,9 +684,17 @@
             <input type="checkbox" name="skus" value="{{ p.sku }}" class="row-check" />
           </td>
           <td onclick="event.stopPropagation();" style="white-space: nowrap;">
-            <code>{{ p.sku }}</code>
-            <button type="button" class="copy-sku-btn" onclick="copySkuToClipboard(this, '{{ p.sku|e }}')"
-                    title="Copiar SKU al portapapeles">📋</button>
+            {% if p.sku_ml %}
+              <code title="SKU enviado a Mercado Libre como SELLER_SKU">{{ p.sku_ml }}</code>
+              <button type="button" class="copy-sku-btn" onclick="copySkuToClipboard(this, '{{ p.sku_ml|e }}')"
+                      title="Copiar SKU ML al portapapeles">📋</button>
+              <div style="font-size: 10px; color: var(--muted); margin-top: 2px; font-family: ui-monospace, monospace;"
+                   title="SKU interno del sistema">{{ p.sku }}</div>
+            {% else %}
+              <code title="SKU del sistema (sin SKU ML cargado, se usa este al publicar)">{{ p.sku }}</code>
+              <button type="button" class="copy-sku-btn" onclick="copySkuToClipboard(this, '{{ p.sku|e }}')"
+                      title="Copiar SKU al portapapeles">📋</button>
+            {% endif %}
           </td>
           <td>{{ p.titulo }}</td>
           <td>{{ p.categoria or '—' }}</td>
