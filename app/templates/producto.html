@@ -342,7 +342,8 @@
   <div style="flex: 1; min-width: 280px;">
     <h1>{{ producto.titulo }}</h1>
     <div class="badge-row">
-      <span class="pbadge pbadge-sku">{{ producto.sku }}</span>
+      <span class="pbadge pbadge-sku" title="SKU del sistema">{{ producto.sku }}</span>
+      {% if producto.sku_ml %}<span class="pbadge" style="background: rgba(255,206,77,.12); color: #fcd34d; border: 1px solid rgba(255,206,77,.35);" title="SKU enviado a Mercado Libre como SELLER_SKU">ML: {{ producto.sku_ml }}</span>{% endif %}
       {% if producto.categoria %}<span class="pbadge">{{ producto.categoria }}</span>{% endif %}
       {% if producto.marca %}<span class="pbadge">{{ producto.marca }}</span>{% endif %}
       {% if producto.activo %}

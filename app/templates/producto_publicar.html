@@ -108,13 +108,17 @@
 {% endif %}
 
 {% if publicaciones_existentes %}
+{% set drafts = publicaciones_existentes | selectattr('ml_item_id', 'none') | list %}
+{% set activas = publicaciones_existentes | rejectattr('ml_item_id', 'none') | list %}
+
+{% if activas %}
 <div class="alert" style="background: rgba(160,25,22,.08); border: 1px solid rgba(160,25,22,.30); color: #fca5a5; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px;">
-  <strong>Este SKU ya tiene {{ publicaciones_existentes|length }} publicación{% if publicaciones_existentes|length > 1 %}es{% endif %} en ML.</strong>
+  <strong>Este SKU ya tiene {{ activas|length }} publicación{% if activas|length > 1 %}es{% endif %} activa{% if activas|length > 1 %}s{% endif %} en ML.</strong>
   Si continuás, se va a crear <strong>una nueva</strong> publicación adicional
   (útil para FULL + tradicional, catálogo + libre, distintas categorías o
-  títulos distintos para A/B). El stock se comparte entre todas en F1.
+  títulos distintos para A/B). El stock se comparte entre todas.
   <ul style="margin: 8px 0 0 20px; font-size: 12px; line-height: 1.7; color: var(--muted-strong);">
-    {% for pub in publicaciones_existentes %}
+    {% for pub in activas %}
     <li>
       <code style="background: var(--panel-2); padding: 1px 6px; border-radius: 3px; color: var(--brand-hover);">{{ pub.ml_item_id }}</code>
       · status: {{ pub.ml_status or '?' }}
@@ -126,6 +130,29 @@
     {% endfor %}
   </ul>
 </div>
+{% endif %}
+
+{% if drafts %}
+<div class="alert" style="background: rgba(245,158,11,.10); border: 1px solid rgba(245,158,11,.40); color: #fcd34d; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px;">
+  <strong>{{ drafts|length }} borrador{% if drafts|length != 1 %}es{% endif %} pendiente{% if drafts|length != 1 %}s{% endif %} de publicar a ML</strong>
+  (generado{% if drafts|length != 1 %}s{% endif %} desde el Excel master por tener filas duplicadas de este SKU).
+  Cada uno tiene sus overrides (título / categoría ML / etc.) listos para usar.
+  <ul style="margin: 8px 0 0 20px; font-size: 12px; line-height: 1.7; color: var(--muted-strong);">
+    {% for pub in drafts %}
+    <li>
+      <strong>Borrador #{{ pub.draft_index }}</strong>
+      {% if pub.ml_titulo %} · título: <em>"{{ pub.ml_titulo|truncate(60) }}"</em>{% endif %}
+      {% if pub.ml_category_id %} · categoría: <code style="background: var(--panel-2); padding: 1px 5px; border-radius: 3px;">{{ pub.ml_category_id }}</code>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p style="margin: 8px 0 0; font-size: 11px; opacity: 0.8;">
+    Cuando publiques desde acá se va a crear UNA nueva publicación. Para publicar
+    cada borrador con sus overrides específicos, los publicás de a uno desde el
+    detalle del producto (próximo deploy).
+  </p>
+</div>
+{% endif %}
 {% endif %}
 
 {% if es_matriz %}

@@ -225,6 +225,17 @@ def _apply_migrations() -> None:
         WHERE ml_item_id IS NOT NULL
         ON CONFLICT (ml_item_id) DO NOTHING
         """,
+        # v17 (2026-05-28): SKU para Mercado Libre separado del SKU interno.
+        # El SKU del sistema (`productos.sku`) sigue siendo el identificador
+        # único interno. `sku_ml` es lo que se manda a ML como SELLER_SKU,
+        # puede repetirse entre productos (caso "publicar 2 versiones distintas
+        # con el mismo código de proveedor"). Si está vacío, se usa el sku
+        # interno como fallback.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS sku_ml VARCHAR(64)
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_productos_sku_ml ON productos(sku_ml)",
         # v17 (2026-05-27): snapshots de precios ML para construir histórico.
         # ML no expone historial vía API — lo armamos con capturas periódicas.
         """

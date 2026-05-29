@@ -130,6 +130,18 @@
     </div>
   </div>
 
+  <div class="form-row">
+    <label for="sku_ml">SKU Mercado Libre <span style="color: var(--muted); font-weight: normal; font-size: 12px;">(opcional · puede repetirse entre productos)</span></label>
+    <input id="sku_ml" name="sku_ml" type="text" maxlength="64"
+           value="{{ producto.sku_ml or '' }}"
+           placeholder="Ej: GE100 — si lo dejás vacío se usa el SKU del sistema ({{ producto.sku }}) como SELLER_SKU" />
+    <span class="helper" style="font-size: 12px;">
+      Este es el código que ML recibe como <code>SELLER_SKU</code>. Distinto del SKU del sistema —
+      podés tener 2 productos del sistema (ej <code>{{ producto.sku }}-A</code> y <code>{{ producto.sku }}-B</code>) que comparten el mismo SKU ML
+      para publicarlos como "2 versiones del mismo código de proveedor".
+    </span>
+  </div>
+
   <div class="form-grid">
     <div class="form-row">
       <label for="precio_costo">Precio costo</label>

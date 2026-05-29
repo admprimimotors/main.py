@@ -47,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.47.0"
+APP_VERSION = "0.48.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -1485,6 +1485,7 @@ def catalogo_editar_save(
     descripcion: str = Form(default=""),
     categoria: str = Form(default=""),
     marca: str = Form(default=""),
+    sku_ml: str = Form(default=""),
     precio_costo: str = Form(default=""),
     precio_final: str = Form(default=""),
     moneda: str = Form(default="ARS"),
@@ -1516,6 +1517,7 @@ def catalogo_editar_save(
             descripcion=descripcion,
             categoria=categoria,
             marca=marca,
+            sku_ml=sku_ml,
             precio_costo=_to_dec(precio_costo),
             precio_final=_to_dec(precio_final),
             moneda=moneda,

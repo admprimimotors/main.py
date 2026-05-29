@@ -636,9 +636,12 @@ def build_create_payload(
 
     attributes = _ficha_to_ml_attributes(producto, category_attrs)
     # SELLER_SKU es un atributo de sistema (válido para casi todas las categorías)
-    # que ML usa como "código del vendedor". Lo agregamos siempre con el SKU local.
-    if producto.sku and not any(a.get("id") == "SELLER_SKU" for a in attributes):
-        attributes.append({"id": "SELLER_SKU", "value_name": str(producto.sku)})
+    # que ML usa como "código del vendedor". Usamos `sku_ml` si está cargado
+    # (permite repetir el mismo código en varios productos del sistema sin
+    # romper la unicidad interna); fallback al SKU del sistema si no.
+    seller_sku = (producto.sku_ml or "").strip() or producto.sku
+    if seller_sku and not any(a.get("id") == "SELLER_SKU" for a in attributes):
+        attributes.append({"id": "SELLER_SKU", "value_name": str(seller_sku)})
 
     payload: dict = {
         "category_id": ml_category_id,
@@ -654,8 +657,9 @@ def build_create_payload(
         "attributes": attributes,
         "status": initial_status,
         # seller_custom_field: alias top-level usado por ML para identificar el
-        # SKU del vendedor. Lo mandamos además de SELLER_SKU como atributo.
-        "seller_custom_field": producto.sku or "",
+        # SKU del vendedor. Mandamos sku_ml (o sku como fallback) — mismo valor
+        # que SELLER_SKU para ser consistentes.
+        "seller_custom_field": seller_sku or "",
     }
     # family_name: SOLO si vamos a publicar como catálogo. Si publicamos opt-out
     # (catalog_listing=false), mandar family_name nos lockearía el título.
@@ -1122,15 +1126,17 @@ def build_matrix_payload(
 
         # Atributos opcionales por variación: solo SELLER_SKU por ahora.
         # ML acepta `attributes` array dentro de cada variation también.
+        # Usamos sku_ml si está, fallback al sku interno.
+        var_seller_sku = (v.sku_ml or "").strip() or v.sku
         var_attrs = []
-        if v.sku:
-            var_attrs.append({"id": "SELLER_SKU", "value_name": str(v.sku)})
+        if var_seller_sku:
+            var_attrs.append({"id": "SELLER_SKU", "value_name": str(var_seller_sku)})
 
         variations_block.append({
             "attribute_combinations": [combo],
             "price": float(v.precio_final or 0),
             "available_quantity": int(v.stock_actual or 0),
-            "seller_custom_field": v.sku,
+            "seller_custom_field": var_seller_sku,
             "attributes": var_attrs,
             # ML acepta `pictures` o `picture_ids`. Con `pictures` nos podemos
             # ahorrar un upload previo (ML toma las URLs y las descarga).

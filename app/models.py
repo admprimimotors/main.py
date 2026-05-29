@@ -72,6 +72,13 @@ class Producto(Base):
 
     # Identidad de negocio
     sku: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    # SKU que se manda a Mercado Libre como SELLER_SKU. Puede repetirse entre
+    # productos: es el caso típico de "publicar 2 versiones del mismo código de
+    # proveedor con distintas configuraciones". Si está vacío, se usa `sku`
+    # como fallback al publicar/pushear.
+    sku_ml: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     titulo: Mapped[str] = mapped_column(String(500), nullable=False)
     descripcion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

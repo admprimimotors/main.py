@@ -43,6 +43,15 @@ from .models import FotoProducto, Producto, ProductoCompatibilidad, Vehiculo
 PRODUCTO_COL_ALIASES: dict[str, str] = {
     "sku": "sku",
     "codigo": "sku",
+    # SKU para Mercado Libre (SELLER_SKU). Puede repetirse entre productos.
+    # Si no se carga, se usa el SKU del sistema como fallback al publicar.
+    "sku_ml": "sku_ml",
+    "skuml": "sku_ml",
+    "sku_mercadolibre": "sku_ml",
+    "seller_sku": "sku_ml",
+    "sellersku": "sku_ml",
+    "ml_sku": "sku_ml",
+    "mlsku": "sku_ml",
     "titulo": "titulo",
     "title": "titulo",
     "nombre": "titulo",
@@ -326,10 +335,13 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
 
     sku_col = field_to_col["sku"]
 
-    # Construir filas para el upsert
+    # Construir filas para el upsert. El SKU del sistema (`sku`) DEBE ser único
+    # — si hay duplicados, los rechazamos con error explícito. Para "publicar
+    # 2 veces el mismo SKU en ML" hay que poner SKUs internos distintos
+    # (ej GE100-A, GE100-B) y compartir el SKU_ML (que es el SELLER_SKU
+    # que recibe Mercado Libre y SÍ puede repetirse).
     rows: list[dict] = []
     seen_skus: set[str] = set()
-    # Mapping paralelo SKU → URLs de fotos (procesado post-upsert)
     fotos_por_sku: dict[str, list[str]] = {}
     for idx, row in df.iterrows():
         sku = _parse_str(row.get(sku_col))
@@ -337,7 +349,14 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             result.errores.append(f"Catalogo fila {idx + 2}: SKU vacío, saltada")
             continue
         if sku in seen_skus:
-            result.errores.append(f"Catalogo fila {idx + 2}: SKU duplicado en el Excel ({sku}), uso la última")
+            result.errores.append(
+                f"Catalogo fila {idx + 2}: SKU duplicado en el Excel ({sku}). "
+                f"El SKU del sistema debe ser único. Si querés repetir este "
+                f"código en Mercado Libre, usá la columna SKU_ML — el SKU "
+                f"interno puede ser '{sku}-A', '{sku}-B', etc., y todos "
+                f"compartir SKU_ML='{sku}'."
+            )
+            continue
         seen_skus.add(sku)
 
         ficha: dict = {}
@@ -345,7 +364,7 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             val = row.get(col)
             if _is_blank(val):
                 continue
-            val = _to_native(val)  # numpy.int64 / Timestamp → tipos nativos
+            val = _to_native(val)
             if val is None:
                 continue
             if isinstance(val, str):
@@ -359,8 +378,6 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             return row.get(col) if col else None
 
         titulo = _parse_str(_g("titulo")) or sku
-
-        # URLs de fotos (separadas por ;, , o newline)
         fotos_raw = _parse_str(_g("fotos_urls"))
         if fotos_raw:
             urls = _parse_fotos_urls(fotos_raw)
@@ -369,6 +386,7 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
 
         rows.append({
             "sku": sku,
+            "sku_ml": _parse_str(_g("sku_ml")),
             "titulo": titulo,
             "descripcion": _parse_str(_g("descripcion")),
             "categoria": _parse_str(_g("categoria")),
@@ -385,9 +403,6 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
             "ml_category_id": _parse_str(_g("ml_category_id")),
             "ml_envio_fijo": _parse_decimal(_g("ml_envio_fijo")),
             "ml_impuestos_pct": _parse_decimal(_g("ml_impuestos_pct")),
-            # Si en el Excel viene un número (3, 5, 10, etc.), se publica en
-            # ML como MANUFACTURING_TIME. Si viene vacío, queda NULL y no se
-            # envía nada (default: "Llega mañana" si hay stock).
             "dias_disponibilidad": _parse_int(_g("dias_disponibilidad")),
         })
 
@@ -405,6 +420,7 @@ def _process_catalogo_sheet(db: Session, df: pd.DataFrame, result: UploadResult)
     # Esto evita que un upload "parcial" pise datos (ej: subir solo Stock no
     # borra el ML_Item_ID existente).
     column_present = {
+        "sku_ml": "sku_ml" in field_to_col,
         "titulo": "titulo" in field_to_col,
         "descripcion": "descripcion" in field_to_col,
         "categoria": "categoria" in field_to_col,
@@ -1737,6 +1753,7 @@ def exportar_catalogo_xlsx(
     for p in productos:
         row = {
             "SKU": p.sku,
+            "SKU_ML": p.sku_ml or "",
             "Titulo": p.titulo or "",
             "Descripcion": p.descripcion or "",
             "Categoria": p.categoria or "",
@@ -1878,6 +1895,7 @@ def update_producto_basic(
     descripcion: Optional[str] = None,
     categoria: Optional[str] = None,
     marca: Optional[str] = None,
+    sku_ml: Optional[str] = None,
     precio_costo: Optional[Decimal] = None,
     precio_final: Optional[Decimal] = None,
     moneda: Optional[str] = None,
@@ -1916,8 +1934,13 @@ def update_producto_basic(
         _set("descripcion", descripcion.strip() or None)
     if categoria is not None:
         _set("categoria", categoria.strip() or None)
+
     if marca is not None:
         _set("marca", marca.strip() or None)
+    if sku_ml is not None:
+        # Limpio: trim + None si está vacío. No transforma case (el SKU ML
+        # puede ser case-sensitive según cómo lo registró el vendedor).
+        _set("sku_ml", sku_ml.strip() or None)
     if precio_costo is not None:
         _set("precio_costo", precio_costo if precio_costo != "" else None)
     if precio_final is not None:
@@ -2064,8 +2087,10 @@ def push_to_ml(
         if cat_id:
             cat_attrs = ml_client.get_category_attributes(db, cat_id) or []
             full_payload_attrs = ml_publisher._ficha_to_ml_attributes(prod, cat_attrs)
-            if prod.sku and not any(a.get("id") == "SELLER_SKU" for a in full_payload_attrs):
-                full_payload_attrs.append({"id": "SELLER_SKU", "value_name": str(prod.sku)})
+            # SELLER_SKU usa sku_ml si está cargado, fallback al sku interno.
+            seller_sku_val = (prod.sku_ml or "").strip() or prod.sku
+            if seller_sku_val and not any(a.get("id") == "SELLER_SKU" for a in full_payload_attrs):
+                full_payload_attrs.append({"id": "SELLER_SKU", "value_name": str(seller_sku_val)})
             for a in full_payload_attrs:
                 aid = a.get("id")
                 if not aid:
