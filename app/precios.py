@@ -421,18 +421,33 @@ def compute_precio_changes(
     return preview if return_preview else preview.changes
 
 
-def apply_precio_changes(db: Session, changes: list[PrecioChange]) -> int:
+def apply_precio_changes(
+    db: Session,
+    changes: list[PrecioChange],
+    *,
+    usuario: Optional[str] = None,
+    origen: str = "precios_bulk_apply",
+    nota: Optional[str] = None,
+) -> int:
     """
     Aplica los cambios pre-computados. Devuelve cantidad de productos actualizados.
     Múltiples cambios para el mismo SKU (ej: costo y final) se mergean.
+
+    Por cada cambio en `precio_final` registra una fila en `precio_cambios_log`
+    para construir trazabilidad del histórico (fonte="sistema_bulk").
     """
     if not changes:
         return 0
 
+    # Lazy import para evitar circular.
+    from . import ml_price_tracker as _mpt
+
     # Agrupar por SKU
     sku_updates: dict[str, dict] = {}
+    sku_anterior: dict[str, dict] = {}  # capturamos los valores anteriores
     for c in changes:
         sku_updates.setdefault(c.sku, {})[c.campo] = c.valor_nuevo
+        sku_anterior.setdefault(c.sku, {})[c.campo] = c.valor_anterior
 
     aplicados = 0
     for sku, updates in sku_updates.items():
@@ -444,6 +459,27 @@ def apply_precio_changes(db: Session, changes: list[PrecioChange]) -> int:
         for campo, val in updates.items():
             setattr(prod, campo, val)
         aplicados += 1
+
+        # Audit log SOLO para precio_final (lo que afecta venta y se pushea a ML).
+        if "precio_final" in updates:
+            try:
+                _mpt.log_precio_cambio(
+                    db,
+                    sku=sku,
+                    precio_anterior=sku_anterior.get(sku, {}).get("precio_final"),
+                    precio_nuevo=updates["precio_final"],
+                    fonte="sistema_bulk",
+                    origen=origen,
+                    usuario=usuario,
+                    nota=nota,
+                    pushed_to_ml=False,  # el caller marca true después si pushea
+                    producto_id=prod.id,
+                    ml_item_id=prod.ml_item_id,
+                    titulo=prod.titulo,
+                )
+            except Exception as e:
+                # No abortamos el apply por un fallo del log.
+                print(f"[apply_precio_changes] log falló para {sku}: {e}")
 
     db.commit()
     return aplicados

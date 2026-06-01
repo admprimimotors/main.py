@@ -268,6 +268,39 @@ def _apply_migrations() -> None:
         ALTER TABLE productos
         ADD COLUMN IF NOT EXISTS dias_disponibilidad INTEGER
         """,
+        # v18 (2026-06-01): columna source en ml_price_snapshots para diferenciar
+        # snapshots api / backfill desde ventas / forzados manualmente.
+        """
+        ALTER TABLE ml_price_snapshots
+        ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'api'
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_mlpricesnap_source ON ml_price_snapshots(source)",
+        # v18 (2026-06-01): tabla precio_cambios_log — audit de cambios de precio
+        # disparados desde el sistema (no detectados desde ML).
+        """
+        CREATE TABLE IF NOT EXISTS precio_cambios_log (
+            id SERIAL PRIMARY KEY,
+            producto_id INTEGER REFERENCES productos(id) ON DELETE SET NULL,
+            sku VARCHAR(64),
+            ml_item_id VARCHAR(64),
+            titulo_snapshot VARCHAR(500),
+            precio_anterior NUMERIC(12, 2),
+            precio_nuevo NUMERIC(12, 2) NOT NULL,
+            fonte VARCHAR(40) NOT NULL,
+            origen VARCHAR(80),
+            usuario VARCHAR(80),
+            nota VARCHAR(300),
+            pushed_to_ml BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_preccambiolog_sku ON precio_cambios_log(sku)",
+        "CREATE INDEX IF NOT EXISTS ix_preccambiolog_ml ON precio_cambios_log(ml_item_id)",
+        "CREATE INDEX IF NOT EXISTS ix_preccambiolog_fonte ON precio_cambios_log(fonte)",
+        "CREATE INDEX IF NOT EXISTS ix_preccambiolog_created ON precio_cambios_log(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_preccambiolog_sku_created ON precio_cambios_log(sku, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_preccambiolog_fonte_created ON precio_cambios_log(fonte, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_preccambiolog_pushed ON precio_cambios_log(pushed_to_ml)",
     ]
     try:
         with engine.begin() as conn:

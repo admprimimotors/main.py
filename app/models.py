@@ -775,10 +775,79 @@ class MLPriceSnapshot(Base):
     # Permite filtrar fácilmente solo los cambios reales (sin ruido de snapshots iguales).
     is_change: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
+    # Origen del snapshot. Permite distinguir entre:
+    #   "api"            → captura automática vía /items/{id} (snapshot regular)
+    #   "sale_backfill"  → reconstruido desde MLOrder.precio_unitario (backfill histórico)
+    #   "manual"         → forzado por usuario desde el botón "Capturar ahora"
+    source: Mapped[str] = mapped_column(String(20), default="api", nullable=False, index=True)
+
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
 
     __table_args__ = (
         Index("ix_mlpricesnap_item_capt", "ml_item_id", "captured_at"),
+    )
+
+
+# =============================================================
+# PrecioCambioLog — audit log de cambios de precio del sistema
+# =============================================================
+
+class PrecioCambioLog(Base):
+    """
+    Audit log de cambios de precio efectuados DESDE el sistema (no detectados
+    desde ML). Cada fila es un evento de "alguien cambió el precio_final de un
+    producto" o "alguien pusheó precio a ML desde acá".
+
+    Diferencia con MLPriceSnapshot:
+      - MLPriceSnapshot captura el estado del precio de ML en un momento dado
+        (lectura).
+      - PrecioCambioLog registra la INTENCIÓN del sistema de cambiar el precio
+        (escritura) — sirve para saber "yo (Primi) cambié esto cuándo y por qué".
+
+    Las dos fuentes juntas en /precios-historial dan trazabilidad completa.
+    """
+    __tablename__ = "precio_cambios_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    producto_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("productos.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    sku: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    ml_item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    titulo_snapshot: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Precios. precio_anterior puede ser NULL (primera vez que se setea).
+    precio_anterior: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    precio_nuevo: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+    # Fuente del cambio. Valores:
+    #   "sistema_bulk"      → bulk update vía /precios apply
+    #   "sistema_individual" → edit individual vía /catalogo/{sku} edit
+    #   "ml_push"           → push manual a ML (push_to_ml con push_price=True)
+    #   "ml_sync_in"        → detectado al sincronizar desde ML (sync_producto_from_ml)
+    fonte: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+
+    # Origen humano-legible (endpoint, operación, etc.) para debug.
+    # Ej: "precios_bulk_apply", "catalogo_edit", "push_to_ml_manual".
+    origen: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+
+    # Usuario que disparó el cambio (admin del panel). Para multi-user a futuro.
+    usuario: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+
+    # Nota libre. Para bulk: "redondeo a 9", "ajuste -15%", etc.
+    nota: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+
+    # Si el cambio se pusheó a ML (true) o quedó solo en DB local (false).
+    pushed_to_ml: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+    __table_args__ = (
+        Index("ix_preccambiolog_sku_created", "sku", "created_at"),
+        Index("ix_preccambiolog_fonte_created", "fonte", "created_at"),
     )

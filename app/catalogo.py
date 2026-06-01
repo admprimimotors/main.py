@@ -2166,9 +2166,30 @@ def push_to_ml(
 
     if "precio" in actions:
         try:
+            _precio_anterior_ml = prod.ml_precio
             ml_client.update_item_price(db, prod.ml_item_id, prod.precio_final)
             prod.ml_precio = prod.precio_final
             msgs.append(f"precio=${prod.precio_final:,.0f}")
+
+            # Audit log: registramos el push manual a ML.
+            try:
+                from . import ml_price_tracker as _mpt
+                _mpt.log_precio_cambio(
+                    db,
+                    sku=prod.sku,
+                    precio_anterior=_precio_anterior_ml,
+                    precio_nuevo=prod.precio_final,
+                    fonte="ml_push",
+                    origen="push_to_ml",
+                    usuario=None,  # el caller debería poder pasarlo, simplificación F1
+                    nota=None,
+                    pushed_to_ml=True,
+                    producto_id=prod.id,
+                    ml_item_id=prod.ml_item_id,
+                    titulo=prod.titulo,
+                )
+            except Exception as _e_log:
+                print(f"[push_to_ml] log falló: {_e_log}")
         except ml_client.MLClientError as e:
             errors.append(f"precio falló: {e}")
 

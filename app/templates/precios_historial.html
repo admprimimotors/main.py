@@ -4,61 +4,95 @@
 {% block content %}
 <style>
   .hist-table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  .hist-table th, .hist-table td { padding: 6px 10px; border-bottom: 1px solid #e0e0e0; text-align: left; }
-  .hist-table th { background: #f4f4f4; font-weight: 600; }
-  .hist-table tr:hover { background: #fafafa; }
-  .badge-change { background: #ffe6cc; color: #b85b00; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
-  .badge-same { color: #999; font-size: 11px; }
-  .price-up { color: #c0392b; font-weight: 600; }
-  .price-down { color: #27ae60; font-weight: 600; }
-  .meta { color: #777; font-size: 12px; }
-  .header-actions { display: flex; gap: 12px; align-items: center; margin: 16px 0; }
-  .search-box input { padding: 6px 10px; width: 260px; }
-  .btn { padding: 8px 14px; background: #2C3E50; color: #fff; border: 0; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
-  .btn:hover { background: #1a2533; }
-  .btn-secondary { background: #5d6d7e; }
-  .stat-card { display: inline-block; background: #f4f4f4; padding: 10px 18px; border-radius: 5px; margin-right: 12px; }
-  .stat-card .num { font-size: 22px; font-weight: 700; color: #2c3e50; }
-  .stat-card .lbl { font-size: 11px; color: #777; text-transform: uppercase; }
+  .hist-table th, .hist-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  .hist-table th { background: rgba(255,255,255,.04); font-weight: 600; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+  .hist-table tr:hover { background: rgba(255,255,255,.02); }
+  .hist-table tr.row-sistema { border-left: 3px solid #ef4444; }
+  .hist-table tr.row-ml_snapshot { border-left: 3px solid #f59e0b; }
+  .hist-table tr.row-ml_venta { border-left: 3px solid #10b981; }
+  .badge { padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; display: inline-block; }
+  .badge-sistema { background: rgba(239,68,68,.15); color: #ef4444; border: 1px solid rgba(239,68,68,.35); }
+  .badge-ml_snapshot { background: rgba(245,158,11,.12); color: #f59e0b; border: 1px solid rgba(245,158,11,.35); }
+  .badge-ml_venta { background: rgba(16,185,129,.12); color: #10b981; border: 1px solid rgba(16,185,129,.35); }
+  .price-up { color: #ef4444; font-weight: 600; }
+  .price-down { color: #10b981; font-weight: 600; }
+  .price-flat { color: var(--muted); font-size: 11px; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .header-actions { display: flex; gap: 12px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
+  .search-box input { padding: 8px 12px; width: 220px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+  .filter-select { padding: 8px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+  .stat-card { display: inline-block; background: var(--bg-soft); padding: 14px 22px; border-radius: 6px; margin-right: 10px; border: 1px solid var(--border); min-width: 140px; }
+  .stat-card .num { font-size: 22px; font-weight: 700; color: var(--text); }
+  .stat-card .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .stat-card.accent-rojo { border-color: rgba(239,68,68,.4); }
+  .stat-card.accent-rojo .num { color: #ef4444; }
+  .stat-card.accent-naranja { border-color: rgba(245,158,11,.4); }
+  .stat-card.accent-naranja .num { color: #f59e0b; }
+  .stat-card.accent-verde { border-color: rgba(16,185,129,.4); }
+  .stat-card.accent-verde .num { color: #10b981; }
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty .icon { font-size: 48px; opacity: 0.4; }
+  .nota-cell { color: var(--muted); font-style: italic; font-size: 11px; max-width: 180px; }
+  .sku-link { color: var(--accent); text-decoration: none; font-family: monospace; font-weight: 600; }
+  .sku-link:hover { text-decoration: underline; }
 </style>
 
-<h1>Histórico de precios ML</h1>
+<h1>Histórico de precios</h1>
 
 {% if error_msg %}
-<div style="background:#fff3f3; border:1px solid #c0392b; color:#7a1c12; padding:12px 16px; border-radius:6px; margin-bottom:18px;">
+<div style="background:#3a1a1a; border:1px solid #8b2c2c; color:#ffaaaa; padding:12px 16px; border-radius:6px; margin-bottom:18px;">
   <strong>{{ error_msg }}</strong>
   {% if error_detail %}
   <details style="margin-top:8px;">
-    <summary style="cursor:pointer; color:#7a1c12;">Ver detalle técnico</summary>
-    <pre style="font-size:11px; white-space:pre-wrap; margin-top:8px; background:#fff; padding:8px; border:1px solid #e0c5c5; max-height:400px; overflow:auto;">{{ error_detail }}</pre>
+    <summary style="cursor:pointer;">Ver detalle técnico</summary>
+    <pre style="font-size:11px; white-space:pre-wrap; margin-top:8px; background:#0d0d0d; padding:8px; border:1px solid #5a1c1c; max-height:400px; overflow:auto;">{{ error_detail }}</pre>
   </details>
   {% endif %}
 </div>
 {% endif %}
 
+<!-- Stats grid -->
 <div style="margin-bottom: 18px;">
-  <div class="stat-card">
-    <div class="num">{{ items_trackeados }}</div>
-    <div class="lbl">Items trackeados</div>
+  <div class="stat-card accent-rojo">
+    <div class="lbl">Cambios del sistema</div>
+    <div class="num">{{ total_log_sistema }}</div>
   </div>
-  <div class="stat-card">
+  <div class="stat-card accent-naranja">
+    <div class="lbl">Snapshots ML totales</div>
     <div class="num">{{ total_snaps }}</div>
-    <div class="lbl">Snapshots totales</div>
   </div>
   <div class="stat-card">
-    <div class="num">
-      {% if ultimo_snapshot %}{{ ultimo_snapshot.strftime("%d/%m %H:%M") }}{% else %}--{% endif %}
+    <div class="lbl">Items trackeados</div>
+    <div class="num">{{ items_trackeados }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="lbl">Último snapshot ML</div>
+    <div class="num" style="font-size:14px;">
+      {% if ultimo_snapshot %}{{ ultimo_snapshot.strftime("%d/%m %H:%M") }}{% else %}—{% endif %}
     </div>
-    <div class="lbl">Último snapshot</div>
   </div>
 </div>
 
+<!-- Filtros + acciones -->
 <div class="header-actions">
-  <form method="get" action="/precios-historial" class="search-box">
-    <input type="text" name="item_id" value="{{ item_id }}" placeholder="MLA1234567890" />
-    <button type="submit" class="btn">Buscar item</button>
-    {% if item_id %}<a href="/precios-historial" class="btn btn-secondary">Volver al listado</a>{% endif %}
+  <form method="get" action="/precios-historial" class="search-box" style="display:flex; gap:8px;">
+    <input type="text" name="sku" value="{{ sku }}" placeholder="Filtrar por SKU..." />
+    <select name="fuente" class="filter-select">
+      <option value="">Fuente: todas</option>
+      <option value="sistema" {% if fuente == 'sistema' %}selected{% endif %}>Sistema (Primi)</option>
+      <option value="ml_snapshot" {% if fuente == 'ml_snapshot' %}selected{% endif %}>ML snapshot</option>
+      <option value="ml_venta" {% if fuente == 'ml_venta' %}selected{% endif %}>Ventas ML</option>
+    </select>
+    <select name="days" class="filter-select">
+      <option value="7" {% if days == 7 %}selected{% endif %}>7 días</option>
+      <option value="30" {% if days == 30 %}selected{% endif %}>30 días</option>
+      <option value="60" {% if days == 60 %}selected{% endif %}>60 días</option>
+      <option value="90" {% if days == 90 %}selected{% endif %}>90 días</option>
+    </select>
+    <button type="submit" class="btn">Filtrar</button>
+    {% if sku or fuente %}<a href="/precios-historial" class="btn btn-secondary">Limpiar</a>{% endif %}
   </form>
+
   <form method="post" action="/api/ml/prices/snapshot" onsubmit="
       event.preventDefault();
       const btn = this.querySelector('button');
@@ -71,86 +105,123 @@
         }
         location.reload();
       });">
-    <button type="submit" class="btn">Capturar snapshot ahora</button>
+    <button type="submit" class="btn" title="Captura el precio actual de todos los items activos">📸 Snapshot ahora</button>
+  </form>
+
+  <form method="post" action="/precios-historial/backfill-ml"
+        onsubmit="return confirm('Esto reconstruye snapshots de los últimos {{ days }} días desde las ventas ML cacheadas. Cada venta = 1 punto histórico (precio_unitario en la fecha de la orden). Idempotente: no duplica. ¿Continuar?');">
+    <input type="hidden" name="days" value="{{ days }}">
+    <button type="submit" class="btn" style="background:#10b981; border:none;"
+            title="Reconstruye histórico de {{ days }} días desde ventas ML cacheadas">
+      ⏪ Backfill desde ventas ({{ days }}d)
+    </button>
   </form>
 </div>
 
-{% if modo == "item" %}
-  <h2>Item {{ item_id }}</h2>
-  {% if snaps %}
-    <p class="meta">{{ snaps|length }} snapshots para este item. Resaltados en naranja: cambios de precio detectados.</p>
-    <table class="hist-table">
-      <thead><tr>
-        <th>Fecha</th><th>Precio</th><th>vs anterior</th>
-        <th>Stock</th><th>Vendidos</th><th>Status</th><th>SKU</th>
-      </tr></thead>
-      <tbody>
-        {% set anterior = namespace(p=None) %}
-        {% for s in snaps|reverse %}
-          {% set p = s.price|float %}
-          {% set delta = (p - anterior.p) if anterior.p is not none else None %}
-          {% set delta_pct = (delta / anterior.p * 100) if (delta is not none and anterior.p) else None %}
-          {% set anterior.p = p %}
-        {% endfor %}
-        {% set running = namespace(p=None) %}
-        {% for s in snaps|sort(attribute='captured_at') %}
-          {% set p = s.price|float %}
-          <tr {% if s.is_change %}style="background:#fff7eb"{% endif %}>
-            <td>{{ s.captured_at.strftime("%d/%m/%Y %H:%M") }}</td>
-            <td><strong>${{ "{:,.2f}".format(p) }}</strong> {{ s.currency or "ARS" }}</td>
-            <td>
-              {% if running.p is not none %}
-                {% set delta = p - running.p %}
-                {% if delta > 0 %}
-                  <span class="price-up">▲ +${{ "{:,.2f}".format(delta) }} ({{ "{:+.1f}".format(delta/running.p*100) }}%)</span>
-                {% elif delta < 0 %}
-                  <span class="price-down">▼ ${{ "{:,.2f}".format(delta) }} ({{ "{:+.1f}".format(delta/running.p*100) }}%)</span>
-                {% else %}
-                  <span class="badge-same">sin cambio</span>
-                {% endif %}
-              {% else %}
-                <span class="badge-change">baseline</span>
-              {% endif %}
-            </td>
-            <td>{{ s.available_quantity }}</td>
-            <td>{{ s.sold_quantity }}</td>
-            <td>{{ s.status }}</td>
-            <td>{{ s.sku or "—" }}</td>
-          </tr>
-          {% set running.p = p %}
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p>No hay snapshots registrados para este item todavía. Probá capturar uno con el botón de arriba.</p>
-  {% endif %}
+{% if item_id %}
+<div style="margin-bottom: 12px;">
+  <strong>Item:</strong> <code>{{ item_id }}</code>
+  <a href="/precios-historial" class="btn btn-secondary" style="margin-left:8px;">← Volver al listado</a>
+</div>
+{% endif %}
+
+<!-- Historial unificado -->
+{% if historial %}
+<p class="meta">{{ historial|length }} evento(s) en los últimos {{ days }} días{% if sku %} para SKU <strong>{{ sku }}</strong>{% endif %}{% if fuente %} · fuente: <strong>{{ fuente }}</strong>{% endif %}.</p>
+
+<div style="overflow-x:auto;">
+<table class="hist-table">
+  <thead>
+    <tr>
+      <th>Fecha</th>
+      <th>Fuente</th>
+      <th>SKU</th>
+      <th>Título</th>
+      <th>Precio anterior</th>
+      <th>Precio nuevo</th>
+      <th>Δ</th>
+      <th>Notas</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for h in historial %}
+    <tr class="row-{{ h.fuente }}">
+      <td style="white-space:nowrap; font-family:monospace; font-size:11px;">
+        {{ h.fecha.strftime("%d/%m/%y %H:%M") if h.fecha else "—" }}
+      </td>
+      <td>
+        {% if h.fuente == "sistema" %}
+          <span class="badge badge-sistema">Sistema</span>
+        {% elif h.fuente == "ml_venta" %}
+          <span class="badge badge-ml_venta">Venta ML</span>
+        {% else %}
+          <span class="badge badge-ml_snapshot">ML snap</span>
+        {% endif %}
+        <div style="font-size:10px; color:var(--muted); margin-top:3px;">{{ h.fuente_detalle }}</div>
+      </td>
+      <td>
+        {% if h.sku %}
+          <a href="/catalogo/{{ h.sku|urlencode }}" class="sku-link">{{ h.sku }}</a>
+        {% else %}
+          —
+        {% endif %}
+        {% if h.ml_item_id %}<div style="font-size:9px; color:var(--muted); font-family:monospace;">{{ h.ml_item_id }}</div>{% endif %}
+      </td>
+      <td style="max-width:220px;">
+        {% if h.titulo %}
+          <span style="font-size:12px;">{{ h.titulo[:60] }}{% if h.titulo|length > 60 %}…{% endif %}</span>
+        {% else %}
+          <span class="meta">—</span>
+        {% endif %}
+      </td>
+      <td style="font-family:monospace; text-align:right;">
+        {% if h.precio_anterior is not none %}
+          ${{ "{:,.2f}".format(h.precio_anterior|float) }}
+        {% else %}
+          <span class="meta">—</span>
+        {% endif %}
+      </td>
+      <td style="font-family:monospace; text-align:right; font-weight:600;">
+        ${{ "{:,.2f}".format(h.precio_nuevo|float) }}
+      </td>
+      <td style="font-family:monospace; text-align:right; white-space:nowrap;">
+        {% if h.delta is not none and h.precio_anterior is not none %}
+          {% if h.delta > 0 %}
+            <span class="price-up">▲ +${{ "{:,.0f}".format(h.delta|float) }}{% if h.delta_pct %} ({{ "{:+.1f}".format(h.delta_pct) }}%){% endif %}</span>
+          {% elif h.delta < 0 %}
+            <span class="price-down">▼ ${{ "{:,.0f}".format(h.delta|float) }}{% if h.delta_pct %} ({{ "{:+.1f}".format(h.delta_pct) }}%){% endif %}</span>
+          {% else %}
+            <span class="price-flat">=</span>
+          {% endif %}
+        {% else %}
+          <span class="meta">—</span>
+        {% endif %}
+      </td>
+      <td class="nota-cell">
+        {% if h.nota %}{{ h.nota }}{% endif %}
+        {% if h.usuario %}<div style="font-size:10px; color:var(--muted);">👤 {{ h.usuario }}</div>{% endif %}
+        {% if h.pushed_to_ml %}<div style="font-size:10px; color:#10b981;">↑ pushed ML</div>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
 
 {% else %}
-  <h2>Cambios recientes (últimos {{ days }} días)</h2>
-  {% if cambios_globales %}
-    <p class="meta">{{ cambios_globales|length }} cambios de precio detectados. Click en el item_id para ver el histórico completo.</p>
-    <table class="hist-table">
-      <thead><tr>
-        <th>Fecha</th><th>Item</th><th>SKU</th><th>Título</th>
-        <th>Precio</th><th>Status</th>
-      </tr></thead>
-      <tbody>
-        {% for s in cambios_globales %}
-          <tr>
-            <td>{{ s.captured_at.strftime("%d/%m %H:%M") }}</td>
-            <td><a href="/precios-historial?item_id={{ s.ml_item_id }}">{{ s.ml_item_id }}</a></td>
-            <td>{{ s.sku or "—" }}</td>
-            <td>{{ s.title[:60] if s.title else "—" }}</td>
-            <td><strong>${{ "{:,.2f}".format(s.price|float) }}</strong></td>
-            <td>{{ s.status }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<div class="empty">
+  <div class="icon">📈</div>
+  <h2 style="color:var(--muted); margin: 12px 0;">Sin cambios de precio en los últimos {{ days }} días</h2>
+  {% if not sku and not fuente %}
+    <p>El histórico se va a empezar a llenar cuando hagás cambios de precio desde el sistema o haya ventas/snapshots de ML.</p>
+    <p style="margin-top:14px;">
+      <strong>Tip:</strong> click en <em>"Backfill desde ventas"</em> arriba para reconstruir el histórico de
+      los últimos {{ days }} días con los datos de órdenes ML que ya están cacheadas.
+    </p>
   {% else %}
-    <p>No se detectaron cambios de precio en los últimos {{ days }} días. El sistema empieza a registrar histórico desde que se activa.</p>
-    <p class="meta">Tip: usá el botón "Capturar snapshot ahora" para forzar una captura. El auto-snapshot diario se dispara automáticamente cuando alguien entra al dashboard.</p>
+    <p>Probá quitando los filtros o ampliando el rango de días.</p>
   {% endif %}
+</div>
 {% endif %}
 
 {% endblock %}

@@ -47,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.51.5"
+APP_VERSION = "0.52.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -407,11 +407,42 @@ def api_ml_prices_history(
     return JSONResponse({"ok": True, "item_id": item_id, "count": len(rows), "rows": rows})
 
 
+@app.post("/precios-historial/backfill-ml")
+def precios_historial_backfill_ml(
+    request: Request,
+    days: int = Form(30),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Reconstruye snapshots desde MLOrders de los últimos N días."""
+    try:
+        summary = ml_price_tracker.backfill_snapshots_from_orders(db, days=days)
+        request.session["flash"] = {
+            "type": "success",
+            "msg": (
+                f"✓ Backfill ML: {summary['snapshots_creados']} nuevos snapshots, "
+                f"{summary['snapshots_skip_dup']} duplicados saltados, "
+                f"{summary['items_afectados']} items afectados "
+                f"({summary['ml_orders_analizadas']} órdenes analizadas)."
+            ),
+        }
+    except Exception as e:
+        import traceback as _tb
+        _tb.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Backfill falló: {type(e).__name__}: {str(e)[:200]}",
+        }
+    return RedirectResponse(f"/precios-historial?days={days}", status_code=303)
+
+
 @app.get("/precios-historial", response_class=HTMLResponse)
 def precios_historial_view(
     request: Request,
     item_id: str = "",
+    sku: str = "",
     days: int = 30,
+    fuente: str = "",
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
@@ -428,12 +459,17 @@ def precios_historial_view(
     from .models import MLPriceSnapshot
 
     item_id = (item_id or "").strip()
+    sku = (sku or "").strip()
+    fuente = (fuente or "").strip().lower()
+
     snaps: list = []
     cambios_globales: list = []
+    historial: list = []
     modo = "globales"
     ultimo_snap = None
     total_snaps = 0
     items_trackeados = 0
+    total_log_sistema = 0
     error_msg: Optional[str] = None
     error_detail: Optional[str] = None
 
@@ -441,7 +477,22 @@ def precios_historial_view(
         if item_id:
             snaps = ml_price_tracker.historial_de_item(db, item_id, only_changes=False, limit=200) or []
             modo = "item"
+            # También historial unificado de ese item específico
+            historial = ml_price_tracker.historial_unificado(
+                db, days=days, ml_item_id=item_id, limit=500,
+            )
         else:
+            # Vista unificada con filtros opcionales
+            fuentes_filter = None
+            if fuente in ("sistema", "ml_snapshot", "ml_venta"):
+                fuentes_filter = [fuente]
+            historial = ml_price_tracker.historial_unificado(
+                db,
+                days=days,
+                sku=sku or None,
+                fuentes=fuentes_filter,
+                limit=500,
+            )
             cambios_globales = ml_price_tracker.cambios_recientes(db, days=days, limit=100) or []
             modo = "globales"
     except Exception as e:
@@ -471,6 +522,16 @@ def precios_historial_view(
         ).scalar() or 0
     except Exception as e:
         print(f"[/precios-historial] items_trackeados error: {e}")
+    # Stats del audit log del sistema
+    try:
+        from .models import PrecioCambioLog as _PCL
+        from datetime import timedelta as _td
+        _desde = datetime.now(timezone.utc) - _td(days=days)
+        total_log_sistema = db.execute(
+            _select(_func.count(_PCL.id)).where(_PCL.created_at >= _desde)
+        ).scalar() or 0
+    except Exception as e:
+        print(f"[/precios-historial] total_log_sistema error: {e}")
 
     # Render del template — TAMBIÉN en try/except. Si Jinja explota, devolvemos
     # un HTML mínimo con el traceback visible para diagnóstico inmediato.
@@ -482,11 +543,15 @@ def precios_historial_view(
                 "user": user,
                 "modo": modo,
                 "item_id": item_id,
+                "sku": sku,
+                "fuente": fuente,
                 "snaps": snaps,
                 "cambios_globales": cambios_globales,
+                "historial": historial,
                 "ultimo_snapshot": ultimo_snap,
                 "total_snaps": total_snaps,
                 "items_trackeados": items_trackeados,
+                "total_log_sistema": total_log_sistema,
                 "days": days,
                 "error_msg": error_msg,
                 "error_detail": error_detail,
@@ -3231,7 +3296,16 @@ def precios_apply(
             redondeo=redondeo_int,
             **filters,
         )
-        aplicados = precios.apply_precio_changes(db, changes)
+        # Nota humano-legible para el audit log: describe la operación bulk.
+        _nota_audit = f"{operacion} {valor_dec} → {target}"
+        if redondeo_int:
+            _nota_audit += f" (round {redondeo_int})"
+        aplicados = precios.apply_precio_changes(
+            db, changes,
+            usuario=user,
+            origen="precios_bulk_apply",
+            nota=_nota_audit,
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()

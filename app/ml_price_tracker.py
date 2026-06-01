@@ -26,7 +26,336 @@ from sqlalchemy import select, func as sql_func
 from sqlalchemy.orm import Session
 
 from . import ml_client
-from .models import MLPriceSnapshot
+from .models import MLPriceSnapshot, PrecioCambioLog
+
+
+# =============================================================
+# Audit log de cambios de precio del sistema (Primi → DB local / ML)
+# =============================================================
+
+def log_precio_cambio(
+    db: Session,
+    *,
+    sku: str,
+    precio_anterior: Optional[Decimal],
+    precio_nuevo: Decimal,
+    fonte: str,
+    origen: Optional[str] = None,
+    usuario: Optional[str] = None,
+    nota: Optional[str] = None,
+    pushed_to_ml: bool = False,
+    producto_id: Optional[int] = None,
+    ml_item_id: Optional[str] = None,
+    titulo: Optional[str] = None,
+) -> Optional[PrecioCambioLog]:
+    """
+    Registra un cambio de precio efectuado desde el sistema.
+
+    fonte: una de
+      "sistema_bulk"        → bulk update vía /precios apply
+      "sistema_individual"  → edit individual en /catalogo/{sku}
+      "ml_push"             → push manual a ML
+      "ml_sync_in"          → detectado al sincronizar desde ML (drift caught)
+
+    No registra si `precio_anterior == precio_nuevo` (no hubo cambio real).
+    No falla en caller — devuelve None si la inserción falla.
+    """
+    try:
+        if precio_anterior is not None and Decimal(str(precio_anterior)) == Decimal(str(precio_nuevo)):
+            return None
+        row = PrecioCambioLog(
+            producto_id=producto_id,
+            sku=(sku or "").strip()[:64] or None,
+            ml_item_id=(ml_item_id or "").strip()[:64] or None,
+            titulo_snapshot=(titulo or "").strip()[:500] or None,
+            precio_anterior=(
+                Decimal(str(precio_anterior)) if precio_anterior is not None else None
+            ),
+            precio_nuevo=Decimal(str(precio_nuevo)),
+            fonte=(fonte or "desconocido")[:40],
+            origen=(origen or "")[:80] or None,
+            usuario=(usuario or "")[:80] or None,
+            nota=(nota or "")[:300] or None,
+            pushed_to_ml=bool(pushed_to_ml),
+        )
+        db.add(row)
+        db.flush()
+        return row
+    except Exception as e:
+        print(f"[log_precio_cambio] no se pudo registrar: {type(e).__name__}: {e}")
+        return None
+
+
+def cambios_log_recientes(
+    db: Session,
+    *,
+    days: int = 30,
+    limit: int = 200,
+    sku: Optional[str] = None,
+    fonte: Optional[str] = None,
+) -> list[PrecioCambioLog]:
+    """Lista las filas de precio_cambios_log de los últimos N días."""
+    from datetime import timedelta
+    desde = datetime.now(timezone.utc) - timedelta(days=days)
+    stmt = (
+        select(PrecioCambioLog)
+        .where(PrecioCambioLog.created_at >= desde)
+        .order_by(PrecioCambioLog.created_at.desc())
+        .limit(limit)
+    )
+    if sku:
+        stmt = stmt.where(PrecioCambioLog.sku == sku)
+    if fonte:
+        stmt = stmt.where(PrecioCambioLog.fonte == fonte)
+    return list(db.execute(stmt).scalars().all())
+
+
+def historial_unificado(
+    db: Session,
+    *,
+    days: int = 30,
+    limit: int = 500,
+    sku: Optional[str] = None,
+    ml_item_id: Optional[str] = None,
+    fuentes: Optional[list[str]] = None,
+) -> list[dict]:
+    """
+    Devuelve histórico unificado de cambios de precio combinando 3 fuentes:
+      - PrecioCambioLog          → "Sistema" (cambios disparados desde Primi)
+      - MLPriceSnapshot(api)     → "ML snapshot" (lecturas automáticas)
+      - MLPriceSnapshot(sale_backfill) → "Venta ML" (reconstruido de órdenes)
+
+    Cada elemento devuelto es un dict con shape:
+      {
+        "fecha": datetime,
+        "fuente": "sistema" | "ml_snapshot" | "ml_venta",
+        "fuente_detalle": str,        # más específico ("sistema_bulk", "ml_push", etc.)
+        "sku": str|None,
+        "ml_item_id": str|None,
+        "titulo": str|None,
+        "precio_anterior": Decimal|None,
+        "precio_nuevo": Decimal|None,
+        "delta": Decimal|None,
+        "delta_pct": float|None,
+        "nota": str|None,
+        "usuario": str|None,
+        "pushed_to_ml": bool|None,
+      }
+
+    Ordenado por fecha desc.
+    """
+    from datetime import timedelta
+    desde = datetime.now(timezone.utc) - timedelta(days=days)
+    fuentes = fuentes or ["sistema", "ml_snapshot", "ml_venta"]
+
+    items: list[dict] = []
+
+    # --- PrecioCambioLog ---
+    if "sistema" in fuentes:
+        stmt = (
+            select(PrecioCambioLog)
+            .where(PrecioCambioLog.created_at >= desde)
+            .order_by(PrecioCambioLog.created_at.desc())
+            .limit(limit)
+        )
+        if sku:
+            stmt = stmt.where(PrecioCambioLog.sku == sku)
+        if ml_item_id:
+            stmt = stmt.where(PrecioCambioLog.ml_item_id == ml_item_id)
+        for r in db.execute(stmt).scalars().all():
+            delta = None
+            delta_pct = None
+            if r.precio_anterior is not None and r.precio_anterior != 0:
+                try:
+                    delta = Decimal(str(r.precio_nuevo)) - Decimal(str(r.precio_anterior))
+                    delta_pct = float(delta / Decimal(str(r.precio_anterior)) * 100)
+                except Exception:
+                    delta = None
+                    delta_pct = None
+            items.append({
+                "fecha": r.created_at,
+                "fuente": "sistema",
+                "fuente_detalle": r.fonte,
+                "sku": r.sku,
+                "ml_item_id": r.ml_item_id,
+                "titulo": r.titulo_snapshot,
+                "precio_anterior": r.precio_anterior,
+                "precio_nuevo": r.precio_nuevo,
+                "delta": delta,
+                "delta_pct": delta_pct,
+                "nota": r.nota,
+                "usuario": r.usuario,
+                "pushed_to_ml": r.pushed_to_ml,
+            })
+
+    # --- MLPriceSnapshot (api + sale_backfill, solo cambios reales) ---
+    if "ml_snapshot" in fuentes or "ml_venta" in fuentes:
+        sources_filter = []
+        if "ml_snapshot" in fuentes:
+            sources_filter.append("api")
+            sources_filter.append("manual")
+        if "ml_venta" in fuentes:
+            sources_filter.append("sale_backfill")
+
+        stmt = (
+            select(MLPriceSnapshot)
+            .where(MLPriceSnapshot.captured_at >= desde)
+            .where(MLPriceSnapshot.is_change.is_(True))
+            .where(MLPriceSnapshot.source.in_(sources_filter))
+            .order_by(MLPriceSnapshot.captured_at.desc())
+            .limit(limit)
+        )
+        if sku:
+            stmt = stmt.where(MLPriceSnapshot.sku == sku)
+        if ml_item_id:
+            stmt = stmt.where(MLPriceSnapshot.ml_item_id == ml_item_id)
+
+        snaps_rows = db.execute(stmt).scalars().all()
+
+        # Buscar precio anterior para cada snapshot (snapshot previo del mismo item).
+        for s in snaps_rows:
+            prev_q = (
+                select(MLPriceSnapshot.price)
+                .where(MLPriceSnapshot.ml_item_id == s.ml_item_id)
+                .where(MLPriceSnapshot.captured_at < s.captured_at)
+                .order_by(MLPriceSnapshot.captured_at.desc())
+                .limit(1)
+            )
+            prev_price = db.execute(prev_q).scalar()
+            delta = None
+            delta_pct = None
+            if prev_price is not None and prev_price != 0:
+                try:
+                    delta = Decimal(str(s.price)) - Decimal(str(prev_price))
+                    delta_pct = float(delta / Decimal(str(prev_price)) * 100)
+                except Exception:
+                    delta = None
+                    delta_pct = None
+
+            fuente_grupo = "ml_venta" if s.source == "sale_backfill" else "ml_snapshot"
+            fuente_det = {
+                "api": "ml_api_snapshot",
+                "sale_backfill": "ml_venta_backfill",
+                "manual": "ml_manual_snapshot",
+            }.get(s.source or "api", s.source or "api")
+
+            items.append({
+                "fecha": s.captured_at,
+                "fuente": fuente_grupo,
+                "fuente_detalle": fuente_det,
+                "sku": s.sku,
+                "ml_item_id": s.ml_item_id,
+                "titulo": s.title,
+                "precio_anterior": prev_price,
+                "precio_nuevo": s.price,
+                "delta": delta,
+                "delta_pct": delta_pct,
+                "nota": None,
+                "usuario": None,
+                "pushed_to_ml": None,
+            })
+
+    # Ordenar por fecha desc.
+    items.sort(key=lambda x: x["fecha"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return items[:limit]
+
+
+# =============================================================
+# Backfill ML snapshots desde MLOrders cacheadas
+# =============================================================
+
+def backfill_snapshots_from_orders(
+    db: Session,
+    *,
+    days: int = 30,
+) -> dict:
+    """
+    Reconstruye snapshots históricos desde MLOrder de los últimos N días.
+    Cada venta cacheada es prueba del precio efectivo en su fecha.
+
+    Para cada venta crea una fila en ml_price_snapshots con
+    price=precio_unitario, captured_at=date_created, source="sale_backfill".
+
+    Idempotente: NO duplica si ya existe un snapshot con
+    (ml_item_id, captured_at, source=sale_backfill).
+
+    Devuelve resumen.
+    """
+    from datetime import timedelta
+    from .models import MLOrder
+
+    desde = datetime.now(timezone.utc) - timedelta(days=days)
+
+    summary = {
+        "ml_orders_analizadas": 0,
+        "snapshots_creados": 0,
+        "snapshots_skip_dup": 0,
+        "items_afectados": 0,
+        "from_date": desde.isoformat(),
+        "errors": [],
+    }
+
+    orders = db.execute(
+        select(MLOrder)
+        .where(MLOrder.date_created >= desde)
+        .where(MLOrder.precio_unitario.is_not(None))
+        .where(MLOrder.status.in_(["paid", "confirmed"]))
+        .order_by(MLOrder.ml_item_id, MLOrder.date_created)
+    ).scalars().all()
+    summary["ml_orders_analizadas"] = len(orders)
+
+    items_seen: set[str] = set()
+    last_price_by_item: dict[str, Decimal] = {}
+
+    for o in orders:
+        item_id = (o.ml_item_id or "").strip()
+        if not item_id or o.precio_unitario is None or o.date_created is None:
+            continue
+
+        existing = db.execute(
+            select(MLPriceSnapshot.id).where(
+                MLPriceSnapshot.ml_item_id == item_id,
+                MLPriceSnapshot.captured_at == o.date_created,
+                MLPriceSnapshot.source == "sale_backfill",
+            )
+        ).first()
+        if existing is not None:
+            summary["snapshots_skip_dup"] += 1
+            continue
+
+        try:
+            new_price = Decimal(str(o.precio_unitario))
+        except Exception:
+            continue
+
+        prev = last_price_by_item.get(item_id)
+        is_change = bool(prev is not None and prev != new_price)
+
+        snap = MLPriceSnapshot(
+            ml_item_id=item_id,
+            title=(o.titulo_snapshot or "")[:500] or None,
+            sku=(o.sku_snapshot or "")[:64] or None,
+            price=new_price,
+            currency="ARS",
+            status=None,
+            available_quantity=None,
+            sold_quantity=None,
+            is_change=is_change,
+            source="sale_backfill",
+            captured_at=o.date_created,
+        )
+        db.add(snap)
+        summary["snapshots_creados"] += 1
+        last_price_by_item[item_id] = new_price
+        items_seen.add(item_id)
+
+    summary["items_afectados"] = len(items_seen)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        summary["errors"].append(f"commit: {type(e).__name__}: {e}")
+    return summary
 
 
 def _seller_id() -> Optional[int]:
