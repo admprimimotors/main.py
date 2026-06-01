@@ -775,12 +775,6 @@ class MLPriceSnapshot(Base):
     # Permite filtrar fácilmente solo los cambios reales (sin ruido de snapshots iguales).
     is_change: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
-    # Origen del snapshot. Permite distinguir entre:
-    #   "api"            → captura automática vía /items/{id} (snapshot regular)
-    #   "sale_backfill"  → reconstruido desde MLOrder.precio_unitario (backfill histórico)
-    #   "manual"         → forzado por usuario desde el botón "Capturar ahora"
-    source: Mapped[str] = mapped_column(String(20), default="api", nullable=False, index=True)
-
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
@@ -850,4 +844,70 @@ class PrecioCambioLog(Base):
     __table_args__ = (
         Index("ix_preccambiolog_sku_created", "sku", "created_at"),
         Index("ix_preccambiolog_fonte_created", "fonte", "created_at"),
+    )
+
+
+# =============================================================
+# MLItemHistory — eventos del "Historial de modificaciones" del seller hub ML
+# =============================================================
+
+class MLItemHistory(Base):
+    """
+    Cada fila es un evento extraído del endpoint del seller hub
+    `/api/seller-item-history/table/events?item_id=MLAxxx&period=...`.
+
+    Esta es la fuente de verdad oficial: refleja exactamente lo que ML te
+    muestra en "Historial de modificaciones" del item, con la columna
+    "Realizada desde" que dice si el cambio vino de Editor Masivo, Integrador
+    (nuestra API), edición individual, etc.
+
+    Para acceder al endpoint del seller hub se requieren cookies de sesión web
+    (no el API token). Ver `app/ml_seller_session.py` para el scraper.
+    """
+    __tablename__ = "ml_item_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    ml_item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    sku: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    # Fecha del evento (la que muestra ML — timezone original AR).
+    fecha_evento: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+    # Tipo de modificación. Ejemplos vistos: "En el precio", "En el stock",
+    # "Estado de la publicación", etc.
+    tipo_modificacion: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+
+    # Valor antes/después como texto crudo (para preservar lo que ML mostró).
+    # Para precios, también lo guardamos numérico aparte abajo.
+    valor_antes_raw: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    valor_despues_raw: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    # Si el evento es de precio, valores numéricos parseados:
+    precio_antes: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    precio_despues: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    delta_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2), nullable=True)
+    delta_signo: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)  # "up"/"down"/"flat"
+
+    # "Realizada desde". Valores vistos: "Mercado Libre - Editor Masivo",
+    # "Integrador - PRIMI MOTORS", etc.
+    realizada_desde: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+
+    # JSON crudo del evento, por si hay campos que aún no parseamos.
+    raw_event: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    # Cuándo lo capturamos (no la fecha del evento, sino cuándo el scraper corrió).
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        # Un mismo (item, fecha exacta, tipo) no se duplica → key natural
+        UniqueConstraint(
+            "ml_item_id", "fecha_evento", "tipo_modificacion",
+            name="uq_mlitem_evento",
+        ),
+        Index("ix_mlitemhistory_item_fecha", "ml_item_id", "fecha_evento"),
     )

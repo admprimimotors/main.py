@@ -21,7 +21,7 @@ services:
     region: oregon                   # cualquier región sirve mientras sea consistente
     branch: main
     autoDeploy: true                 # cada push a main redeploya
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python -m playwright install --with-deps chromium
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
@@ -42,6 +42,13 @@ services:
         sync: false
       # Sesión firmada (si no está, se genera efímera en cada reinicio)
       - key: SESSION_SECRET
+        sync: false
+      # Credenciales del seller hub web de ML (para scrapear el endpoint
+      # /api/seller-item-history). Distintas del API token de ML.
+      # Configurar manualmente en el dashboard de Render.
+      - key: ML_SELLER_USER
+        sync: false
+      - key: ML_SELLER_PASSWORD
         sync: false
       # Conexión a la DB — Render la inyecta automáticamente desde el bloque
       # `databases:` de abajo. Nosotros no la tocamos a mano.

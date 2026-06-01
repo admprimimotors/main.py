@@ -36,6 +36,7 @@ from . import (
     ml_orders,
     ml_price_tracker,
     ml_publisher,
+    ml_seller_session,
     notas_credito,
     precios,
     publicaciones,
@@ -47,7 +48,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.52.0"
+APP_VERSION = "0.53.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -407,33 +408,71 @@ def api_ml_prices_history(
     return JSONResponse({"ok": True, "item_id": item_id, "count": len(rows), "rows": rows})
 
 
-@app.post("/precios-historial/backfill-ml")
-def precios_historial_backfill_ml(
+@app.post("/precios-historial/scrape-ml")
+def precios_historial_scrape_ml(
     request: Request,
-    days: int = Form(30),
+    only_item: str = Form(""),
+    period: str = Form("WITH_DATE_CLOSED_LAST_MONTH"),
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
-    """Reconstruye snapshots desde MLOrders de los últimos N días."""
+    """
+    Dispara el scraping del endpoint real del seller hub de ML.
+    Si only_item viene, solo sincroniza ese item. Si no, todos los vinculados.
+    """
     try:
-        summary = ml_price_tracker.backfill_snapshots_from_orders(db, days=days)
+        if only_item:
+            # Buscar SKU para mejor contexto
+            from sqlalchemy import select as _sel
+            from .models import Producto as _Prod, ProductoPublicacionML as _Pub
+            sku = db.execute(
+                _sel(_Prod.sku)
+                .join(_Pub, _Pub.producto_id == _Prod.id)
+                .where(_Pub.ml_item_id == only_item)
+            ).scalar()
+            res = ml_seller_session.sync_item_history_to_db(
+                db, only_item.strip(), sku=sku, period=period,
+            )
+            if res["ok"]:
+                request.session["flash"] = {
+                    "type": "success",
+                    "msg": (
+                        f"✓ {only_item}: {res['n_eventos']} eventos, "
+                        f"{res['n_nuevos']} nuevos, {res['n_dups']} ya existían."
+                    ),
+                }
+            else:
+                request.session["flash"] = {
+                    "type": "error",
+                    "msg": f"Falló para {only_item}: {res['error']}",
+                }
+        else:
+            summary = ml_seller_session.sync_all_vinculados(db, period=period)
+            errors_msg = ""
+            if summary["errores"]:
+                errors_msg = " · Errores: " + "; ".join(summary["errores"][:3])
+            request.session["flash"] = {
+                "type": "success" if summary["fail"] == 0 else "warning",
+                "msg": (
+                    f"✓ Scrape ML: {summary['ok']}/{summary['total_items']} items OK · "
+                    f"{summary['n_nuevos_total']} eventos nuevos · "
+                    f"{summary['n_dups_total']} dups · {summary['fail']} fallaron."
+                    + errors_msg
+                ),
+            }
+    except ml_seller_session.SellerSessionError as e:
         request.session["flash"] = {
-            "type": "success",
-            "msg": (
-                f"✓ Backfill ML: {summary['snapshots_creados']} nuevos snapshots, "
-                f"{summary['snapshots_skip_dup']} duplicados saltados, "
-                f"{summary['items_afectados']} items afectados "
-                f"({summary['ml_orders_analizadas']} órdenes analizadas)."
-            ),
+            "type": "error",
+            "msg": f"Sesión ML: {e}",
         }
     except Exception as e:
         import traceback as _tb
         _tb.print_exc()
         request.session["flash"] = {
             "type": "error",
-            "msg": f"Backfill falló: {type(e).__name__}: {str(e)[:200]}",
+            "msg": f"Scrape falló: {type(e).__name__}: {str(e)[:200]}",
         }
-    return RedirectResponse(f"/precios-historial?days={days}", status_code=303)
+    return RedirectResponse("/precios-historial", status_code=303)
 
 
 @app.get("/precios-historial", response_class=HTMLResponse)
@@ -533,6 +572,30 @@ def precios_historial_view(
     except Exception as e:
         print(f"[/precios-historial] total_log_sistema error: {e}")
 
+    # Histórico real de ML (scraped del seller hub) — esta es LA fuente.
+    ml_history_rows: list = []
+    total_ml_history = 0
+    try:
+        from .models import MLItemHistory as _MIH
+        from datetime import timedelta as _td
+        _desde = datetime.now(timezone.utc) - _td(days=days)
+        stmt = (
+            _select(_MIH)
+            .where(_MIH.fecha_evento >= _desde)
+            .order_by(_MIH.fecha_evento.desc())
+            .limit(500)
+        )
+        if sku:
+            stmt = stmt.where(_MIH.sku == sku)
+        if item_id:
+            stmt = stmt.where(_MIH.ml_item_id == item_id)
+        ml_history_rows = list(db.execute(stmt).scalars().all())
+        total_ml_history = db.execute(
+            _select(_func.count(_MIH.id)).where(_MIH.fecha_evento >= _desde)
+        ).scalar() or 0
+    except Exception as e:
+        print(f"[/precios-historial] ml_history_rows error: {e}")
+
     # Render del template — TAMBIÉN en try/except. Si Jinja explota, devolvemos
     # un HTML mínimo con el traceback visible para diagnóstico inmediato.
     try:
@@ -548,6 +611,8 @@ def precios_historial_view(
                 "snaps": snaps,
                 "cambios_globales": cambios_globales,
                 "historial": historial,
+                "ml_history_rows": ml_history_rows,
+                "total_ml_history": total_ml_history,
                 "ultimo_snapshot": ultimo_snap,
                 "total_snaps": total_snaps,
                 "items_trackeados": items_trackeados,

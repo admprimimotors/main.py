@@ -120,10 +120,9 @@ def historial_unificado(
     fuentes: Optional[list[str]] = None,
 ) -> list[dict]:
     """
-    Devuelve histórico unificado de cambios de precio combinando 3 fuentes:
+    Devuelve histórico unificado de cambios de precio combinando 2 fuentes:
       - PrecioCambioLog          → "Sistema" (cambios disparados desde Primi)
-      - MLPriceSnapshot(api)     → "ML snapshot" (lecturas automáticas)
-      - MLPriceSnapshot(sale_backfill) → "Venta ML" (reconstruido de órdenes)
+      - MLPriceSnapshot          → "ML snapshot" (lecturas automáticas)
 
     Cada elemento devuelto es un dict con shape:
       {
@@ -146,7 +145,7 @@ def historial_unificado(
     """
     from datetime import timedelta
     desde = datetime.now(timezone.utc) - timedelta(days=days)
-    fuentes = fuentes or ["sistema", "ml_snapshot", "ml_venta"]
+    fuentes = fuentes or ["sistema", "ml_snapshot"]
 
     items: list[dict] = []
 
@@ -188,20 +187,12 @@ def historial_unificado(
                 "pushed_to_ml": r.pushed_to_ml,
             })
 
-    # --- MLPriceSnapshot (api + sale_backfill, solo cambios reales) ---
-    if "ml_snapshot" in fuentes or "ml_venta" in fuentes:
-        sources_filter = []
-        if "ml_snapshot" in fuentes:
-            sources_filter.append("api")
-            sources_filter.append("manual")
-        if "ml_venta" in fuentes:
-            sources_filter.append("sale_backfill")
-
+    # --- MLPriceSnapshot (snapshots automáticos vía API ML) ---
+    if "ml_snapshot" in fuentes:
         stmt = (
             select(MLPriceSnapshot)
             .where(MLPriceSnapshot.captured_at >= desde)
             .where(MLPriceSnapshot.is_change.is_(True))
-            .where(MLPriceSnapshot.source.in_(sources_filter))
             .order_by(MLPriceSnapshot.captured_at.desc())
             .limit(limit)
         )
@@ -232,17 +223,10 @@ def historial_unificado(
                     delta = None
                     delta_pct = None
 
-            fuente_grupo = "ml_venta" if s.source == "sale_backfill" else "ml_snapshot"
-            fuente_det = {
-                "api": "ml_api_snapshot",
-                "sale_backfill": "ml_venta_backfill",
-                "manual": "ml_manual_snapshot",
-            }.get(s.source or "api", s.source or "api")
-
             items.append({
                 "fecha": s.captured_at,
-                "fuente": fuente_grupo,
-                "fuente_detalle": fuente_det,
+                "fuente": "ml_snapshot",
+                "fuente_detalle": "ml_api_snapshot",
                 "sku": s.sku,
                 "ml_item_id": s.ml_item_id,
                 "titulo": s.title,
@@ -260,102 +244,9 @@ def historial_unificado(
     return items[:limit]
 
 
-# =============================================================
-# Backfill ML snapshots desde MLOrders cacheadas
-# =============================================================
-
-def backfill_snapshots_from_orders(
-    db: Session,
-    *,
-    days: int = 30,
-) -> dict:
-    """
-    Reconstruye snapshots históricos desde MLOrder de los últimos N días.
-    Cada venta cacheada es prueba del precio efectivo en su fecha.
-
-    Para cada venta crea una fila en ml_price_snapshots con
-    price=precio_unitario, captured_at=date_created, source="sale_backfill".
-
-    Idempotente: NO duplica si ya existe un snapshot con
-    (ml_item_id, captured_at, source=sale_backfill).
-
-    Devuelve resumen.
-    """
-    from datetime import timedelta
-    from .models import MLOrder
-
-    desde = datetime.now(timezone.utc) - timedelta(days=days)
-
-    summary = {
-        "ml_orders_analizadas": 0,
-        "snapshots_creados": 0,
-        "snapshots_skip_dup": 0,
-        "items_afectados": 0,
-        "from_date": desde.isoformat(),
-        "errors": [],
-    }
-
-    orders = db.execute(
-        select(MLOrder)
-        .where(MLOrder.date_created >= desde)
-        .where(MLOrder.precio_unitario.is_not(None))
-        .where(MLOrder.status.in_(["paid", "confirmed"]))
-        .order_by(MLOrder.ml_item_id, MLOrder.date_created)
-    ).scalars().all()
-    summary["ml_orders_analizadas"] = len(orders)
-
-    items_seen: set[str] = set()
-    last_price_by_item: dict[str, Decimal] = {}
-
-    for o in orders:
-        item_id = (o.ml_item_id or "").strip()
-        if not item_id or o.precio_unitario is None or o.date_created is None:
-            continue
-
-        existing = db.execute(
-            select(MLPriceSnapshot.id).where(
-                MLPriceSnapshot.ml_item_id == item_id,
-                MLPriceSnapshot.captured_at == o.date_created,
-                MLPriceSnapshot.source == "sale_backfill",
-            )
-        ).first()
-        if existing is not None:
-            summary["snapshots_skip_dup"] += 1
-            continue
-
-        try:
-            new_price = Decimal(str(o.precio_unitario))
-        except Exception:
-            continue
-
-        prev = last_price_by_item.get(item_id)
-        is_change = bool(prev is not None and prev != new_price)
-
-        snap = MLPriceSnapshot(
-            ml_item_id=item_id,
-            title=(o.titulo_snapshot or "")[:500] or None,
-            sku=(o.sku_snapshot or "")[:64] or None,
-            price=new_price,
-            currency="ARS",
-            status=None,
-            available_quantity=None,
-            sold_quantity=None,
-            is_change=is_change,
-            source="sale_backfill",
-            captured_at=o.date_created,
-        )
-        db.add(snap)
-        summary["snapshots_creados"] += 1
-        last_price_by_item[item_id] = new_price
-        items_seen.add(item_id)
-
-    summary["items_afectados"] = len(items_seen)
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        summary["errors"].append(f"commit: {type(e).__name__}: {e}")
-    return summary
+# (Eliminado: backfill desde MLOrders v0.52.0 — confusión con la intención del
+#  usuario. Reemplazado por scraping del endpoint real del seller hub de ML.
+#  Ver app/ml_seller_history.py.)
 
 
 def _seller_id() -> Optional[int]:

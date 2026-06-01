@@ -43,3 +43,11 @@ Pillow>=10.2.0
 # Utilidades
 pydantic>=2.5.3
 python-dateutil>=2.8.2
+
+# Scraping del seller hub de ML (endpoint /api/seller-item-history)
+# Playwright para hacer login programático y capturar cookies de sesión web.
+# Después de pip install, el build de Render debe ejecutar:
+#   python -m playwright install --with-deps chromium
+playwright>=1.40.0
+# httpx async para reusar cookies en llamadas masivas sin abrir browser cada vez
+httpx>=0.27.0

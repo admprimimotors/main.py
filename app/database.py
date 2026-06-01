@@ -268,13 +268,6 @@ def _apply_migrations() -> None:
         ALTER TABLE productos
         ADD COLUMN IF NOT EXISTS dias_disponibilidad INTEGER
         """,
-        # v18 (2026-06-01): columna source en ml_price_snapshots para diferenciar
-        # snapshots api / backfill desde ventas / forzados manualmente.
-        """
-        ALTER TABLE ml_price_snapshots
-        ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'api'
-        """,
-        "CREATE INDEX IF NOT EXISTS ix_mlpricesnap_source ON ml_price_snapshots(source)",
         # v18 (2026-06-01): tabla precio_cambios_log — audit de cambios de precio
         # disparados desde el sistema (no detectados desde ML).
         """
@@ -301,6 +294,35 @@ def _apply_migrations() -> None:
         "CREATE INDEX IF NOT EXISTS ix_preccambiolog_sku_created ON precio_cambios_log(sku, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_preccambiolog_fonte_created ON precio_cambios_log(fonte, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_preccambiolog_pushed ON precio_cambios_log(pushed_to_ml)",
+        # v19 (2026-06-01): tabla ml_item_history — eventos del "Historial de
+        # modificaciones" del seller hub de ML (precio/stock/status con la
+        # columna "Realizada desde"). Fuente real desde ML, scraped por
+        # app/ml_seller_session.py.
+        """
+        CREATE TABLE IF NOT EXISTS ml_item_history (
+            id SERIAL PRIMARY KEY,
+            ml_item_id VARCHAR(64) NOT NULL,
+            sku VARCHAR(64),
+            fecha_evento TIMESTAMP WITH TIME ZONE NOT NULL,
+            tipo_modificacion VARCHAR(60) NOT NULL,
+            valor_antes_raw VARCHAR(200),
+            valor_despues_raw VARCHAR(200),
+            precio_antes NUMERIC(12, 2),
+            precio_despues NUMERIC(12, 2),
+            delta_pct NUMERIC(8, 2),
+            delta_signo VARCHAR(8),
+            realizada_desde VARCHAR(120),
+            raw_event JSONB,
+            captured_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_mlitem_evento UNIQUE (ml_item_id, fecha_evento, tipo_modificacion)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_item ON ml_item_history(ml_item_id)",
+        "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_sku ON ml_item_history(sku)",
+        "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_fecha ON ml_item_history(fecha_evento DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_tipo ON ml_item_history(tipo_modificacion)",
+        "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_desde ON ml_item_history(realizada_desde)",
+        "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_item_fecha ON ml_item_history(ml_item_id, fecha_evento)",
     ]
     try:
         with engine.begin() as conn:
