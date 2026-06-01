@@ -39,6 +39,114 @@ STATUS_APLICA_STOCK = {"paid", "confirmed"}
 STATUS_REVIERTE_STOCK = {"cancelled", "invalid", "refunded"}
 
 
+def _refresh_ml_snapshot(
+    db: Session,
+    prod: Producto,
+    ml_item_id: str,
+    *,
+    fallback_delta: int = 0,
+) -> dict:
+    """
+    Refresca el snapshot ML del producto (ml_stock, ml_status, ml_precio,
+    ml_last_synced_at) llamando a /items/{id}.
+
+    Mantiene en sync el DB local con lo que ML ve realmente — sin esperar al
+    "Sync desde ML" manual del usuario.
+
+    También actualiza la fila correspondiente en producto_publicaciones_ml.
+
+    Si la API de ML falla (timeout, rate limit, etc.), aplica un fallback
+    aritmético: ml_stock -= fallback_delta. Esto mantiene la consistencia
+    matemática aunque no la perfección absoluta.
+
+    Devuelve dict con resumen para logging:
+      {
+        "ok": bool,
+        "fonte": "api" | "fallback" | "skip",
+        "ml_stock_anterior": int|None,
+        "ml_stock_nuevo": int|None,
+        "ml_status": str|None,
+        "error": str|None,
+      }
+    """
+    info = {
+        "ok": False,
+        "fonte": "skip",
+        "ml_stock_anterior": prod.ml_stock,
+        "ml_stock_nuevo": None,
+        "ml_status": None,
+        "error": None,
+    }
+    if not ml_item_id:
+        return info
+
+    try:
+        item = ml_client.get_item(db, ml_item_id)
+    except Exception as e:
+        # Fallback aritmético: mantener consistencia local.
+        if fallback_delta and prod.ml_stock is not None:
+            nuevo = (prod.ml_stock or 0) - fallback_delta
+            if nuevo < 0:
+                nuevo = 0
+            prod.ml_stock = nuevo
+            info["ml_stock_nuevo"] = nuevo
+            info["fonte"] = "fallback"
+            info["ok"] = True
+        info["error"] = f"{type(e).__name__}: {e}"
+        return info
+
+    # Snapshot al producto.
+    new_status = item.get("status")
+    new_aq = item.get("available_quantity")
+    new_price = item.get("price")
+
+    if new_status is not None:
+        prod.ml_status = str(new_status)
+        info["ml_status"] = str(new_status)
+    if new_aq is not None:
+        try:
+            prod.ml_stock = int(new_aq)
+            info["ml_stock_nuevo"] = int(new_aq)
+        except (ValueError, TypeError):
+            pass
+    if new_price is not None:
+        try:
+            prod.ml_precio = Decimal(str(new_price))
+        except Exception:
+            pass
+    prod.ml_last_synced_at = datetime.now(timezone.utc)
+
+    # Snapshot también en producto_publicaciones_ml — esa tabla es la fuente
+    # de verdad para el detalle de /publicaciones.
+    try:
+        pub = db.execute(
+            select(ProductoPublicacionML).where(
+                ProductoPublicacionML.ml_item_id == ml_item_id
+            )
+        ).scalar_one_or_none()
+        if pub is not None:
+            if new_status is not None:
+                pub.ml_status = str(new_status)
+            if new_aq is not None:
+                try:
+                    pub.ml_stock_snapshot = int(new_aq)
+                except (ValueError, TypeError):
+                    pass
+            if new_price is not None:
+                try:
+                    pub.ml_precio = Decimal(str(new_price))
+                except Exception:
+                    pass
+            pub.ml_last_synced_at = datetime.now(timezone.utc)
+    except Exception:
+        # No crashea el sync por esto — el snapshot principal ya quedó.
+        pass
+
+    info["ok"] = True
+    info["fonte"] = "api"
+    return info
+
+
 def _parse_ml_date(s: Optional[str]) -> Optional[datetime]:
     """ML devuelve fechas ISO con offset, ej '2026-05-19T10:35:42.000-00:00'."""
     if not s:
@@ -210,6 +318,7 @@ def _process_order_item(
 
     # Aplicar diff de stock = desired - current
     delta_stock = desired_stock_applied - existing.stock_applied
+    refresh_summary: Optional[dict] = None
     if delta_stock != 0 and prod is not None:
         # Decremento (delta=+cantidad → stock_applied sube, stock_actual baja)
         # Incremento de reversa (delta=-cantidad → revertimos)
@@ -219,6 +328,18 @@ def _process_order_item(
         prod.stock_actual = nuevo_stock
         prod.stock_updated_at = datetime.now(timezone.utc)
         existing.stock_applied = desired_stock_applied
+
+        # ANTI-DRIFT: refrescamos el snapshot ML (ml_stock, ml_status, ml_precio)
+        # automáticamente después de procesar la venta. Esto evita el caso
+        # "DB:0 / ML:1" que aparecía hasta que el usuario corría sync manual.
+        # Si la API falla, hacemos fallback aritmético sobre ml_stock.
+        try:
+            refresh_summary = _refresh_ml_snapshot(
+                db, prod, ml_item_id, fallback_delta=delta_stock
+            )
+        except Exception as e:
+            # Nunca rompemos el sync de orders por un fallo de refresh.
+            refresh_summary = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     elif delta_stock != 0 and prod is None:
         # Sin producto local, ni siquiera bajamos stock — solo registramos
         # el MLOrder. El user puede ver el "huérfano" en la lista.
@@ -232,6 +353,7 @@ def _process_order_item(
         "status": status,
         "delta_stock": delta_stock,
         "had_producto": prod is not None,
+        "ml_refresh": refresh_summary,
     }
 
 
@@ -285,6 +407,9 @@ def sync_orders(
         "updated": 0,
         "stock_applied": 0,
         "stock_reverted": 0,
+        "ml_refresh_ok": 0,         # snapshots ML refrescados desde la API
+        "ml_refresh_fallback": 0,   # caídas a fallback aritmético
+        "ml_refresh_fail": 0,       # fallos sin fallback útil
         "errors": [],
         "from_date": since_str,
     }
@@ -323,6 +448,16 @@ def sync_orders(
                         summary["stock_applied"] += delta
                     elif delta < 0:
                         summary["stock_reverted"] += -delta
+                    # Contadores de refresh ML
+                    rf = r.get("ml_refresh") or {}
+                    if rf:
+                        fonte = rf.get("fonte")
+                        if fonte == "api":
+                            summary["ml_refresh_ok"] += 1
+                        elif fonte == "fallback":
+                            summary["ml_refresh_fallback"] += 1
+                        elif rf.get("error"):
+                            summary["ml_refresh_fail"] += 1
                 except Exception as e:
                     summary["errors"].append(
                         f"order {order.get('id')}: {type(e).__name__}: {e}"
