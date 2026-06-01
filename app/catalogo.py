@@ -2340,7 +2340,29 @@ def push_to_ml(
                 msgs.append(f"+{ok_extras} pub. extra{'s' if ok_extras != 1 else ''}")
 
     if msgs:
-        prod.ml_last_synced_at = datetime.now(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        prod.ml_last_synced_at = now_utc
+
+        # Propagar también a la fila de la publicación PRIMARIA (la que
+        # prod.ml_item_id apunta) en producto_publicaciones_ml. Sin esto,
+        # /publicaciones queda con snapshot stale ("DB:0 ML:1" cuando catálogo
+        # ya dice sin drift).
+        try:
+            from .models import ProductoPublicacionML as _PPML
+            pub_primaria = db.execute(
+                select(_PPML).where(_PPML.ml_item_id == prod.ml_item_id)
+            ).scalar_one_or_none()
+            if pub_primaria is not None:
+                if "stock" in actions:
+                    pub_primaria.ml_stock_snapshot = prod.stock_actual
+                    if prod.ml_status:
+                        pub_primaria.ml_status = prod.ml_status
+                if "precio" in actions and prod.precio_final is not None:
+                    pub_primaria.ml_precio = prod.precio_final
+                pub_primaria.ml_last_synced_at = now_utc
+        except Exception as e:
+            print(f"[push_to_ml] propagación a PPML primaria falló: {type(e).__name__}: {e}")
+
     db.commit()
 
     if not errors:
@@ -2434,12 +2456,15 @@ def sync_producto_from_ml(
         return False, f"Error consultando ML: {e}"
 
     # ---- Snapshot (siempre) ----
+    now_utc = datetime.now(timezone.utc)
     prod.ml_status = item.get("status")
     prod.ml_permalink = item.get("permalink") or prod.ml_permalink
     aq = item.get("available_quantity")
+    aq_int: Optional[int] = None
     if aq is not None:
         try:
-            prod.ml_stock = int(aq)
+            aq_int = int(aq)
+            prod.ml_stock = aq_int
         except (ValueError, TypeError):
             pass
     price = item.get("price")
@@ -2450,7 +2475,29 @@ def sync_producto_from_ml(
             prod.ml_precio = ml_price_decimal
         except Exception:
             pass
-    prod.ml_last_synced_at = datetime.now(timezone.utc)
+    prod.ml_last_synced_at = now_utc
+
+    # ---- Propagación a producto_publicaciones_ml ----
+    # /publicaciones lee de esa tabla — si no la actualizamos acá, queda con
+    # snapshot stale (drift visible "DB:0 ML:1" cuando catálogo dice "sin drift").
+    try:
+        from .models import ProductoPublicacionML as _PPML
+        pub = db.execute(
+            select(_PPML).where(_PPML.ml_item_id == prod.ml_item_id)
+        ).scalar_one_or_none()
+        if pub is not None:
+            if item.get("status") is not None:
+                pub.ml_status = str(item["status"])
+            if aq_int is not None:
+                pub.ml_stock_snapshot = aq_int
+            if ml_price_decimal is not None:
+                pub.ml_precio = ml_price_decimal
+            if item.get("permalink"):
+                pub.ml_permalink = str(item["permalink"])[:512]
+            pub.ml_last_synced_at = now_utc
+    except Exception as e:
+        # No rompemos el sync del producto si la propagación falla.
+        print(f"[sync_producto_from_ml] propagación a PPML falló: {type(e).__name__}: {e}")
 
     # ---- Hidratación (solo si hidratar=True) ----
     hidratado: list[str] = []

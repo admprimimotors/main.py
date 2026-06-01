@@ -145,6 +145,21 @@
   {% endif %}
 </form>
 
+<!-- Resync local snapshot (sin tocar ML) -->
+{% if stats.drift and stats.drift > 0 %}
+<form method="post" action="/publicaciones/resync-snapshots"
+      style="margin: 8px 0 16px 0;"
+      onsubmit="return confirm('Esto copia el snapshot del catálogo (Producto) a la tabla de publicaciones cuando el del Producto es más reciente. No hace llamadas a ML. ¿Continuar?');">
+  <button type="submit" class="btn btn-ghost" style="background:#3a2a1a; border-color:#f59e0b; color:#f59e0b;"
+          title="Repara drift local cuando el catálogo está actualizado pero esta tabla no. Sin tocar ML.">
+    ⚡ Resync local desde catálogo ({{ stats.drift }} con drift)
+  </button>
+  <span style="color: var(--muted); font-size: 11px; margin-left: 10px;">
+    Reparación rápida sin llamar a ML (usa el snapshot del catálogo).
+  </span>
+</form>
+{% endif %}
+
 {% if rows %}
 <form method="post" id="bulk-form">
 <div class="card" style="padding: 0; overflow-x: auto;">

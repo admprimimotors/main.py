@@ -294,6 +294,89 @@ def bulk_push_to_ml(
     return n_ok, len(errores), errores
 
 
+def resync_publicaciones_from_productos(db: Session) -> dict:
+    """
+    Repara el drift entre `productos.ml_*` y `producto_publicaciones_ml.ml_*`
+    sin tocar ML (no hace llamadas API).
+
+    Para cada fila de ProductoPublicacionML, copia el snapshot que tiene
+    el Producto correspondiente si:
+      - el Producto tiene ml_last_synced_at más reciente que la publicación, O
+      - la publicación nunca fue sincronizada (ml_last_synced_at IS NULL)
+
+    Útil para arreglar drift histórico generado antes del fix v0.51.5 (cuando
+    el "Sync desde ML" del catálogo solo actualizaba `productos` y no
+    `producto_publicaciones_ml`).
+
+    Devuelve:
+      {
+        "n_publicaciones": int,
+        "n_actualizadas": int,
+        "n_sin_cambio": int,
+        "n_sin_producto": int,
+      }
+    """
+    from .models import ProductoPublicacionML as _PPML
+
+    pubs = db.execute(
+        select(_PPML)
+    ).scalars().all()
+
+    n_actualizadas = 0
+    n_sin_cambio = 0
+    n_sin_producto = 0
+
+    for pub in pubs:
+        prod = db.execute(
+            select(Producto).where(Producto.id == pub.producto_id)
+        ).scalar_one_or_none()
+        if prod is None:
+            n_sin_producto += 1
+            continue
+
+        # ¿El snapshot del producto es más fresco?
+        prod_synced = prod.ml_last_synced_at
+        pub_synced = pub.ml_last_synced_at
+        more_fresh = (
+            prod_synced is not None
+            and (pub_synced is None or prod_synced > pub_synced)
+        )
+        if not more_fresh:
+            n_sin_cambio += 1
+            continue
+
+        # Copiamos snapshot.
+        changed = False
+        if prod.ml_status is not None and pub.ml_status != prod.ml_status:
+            pub.ml_status = prod.ml_status
+            changed = True
+        if prod.ml_stock is not None and pub.ml_stock_snapshot != prod.ml_stock:
+            pub.ml_stock_snapshot = prod.ml_stock
+            changed = True
+        if prod.ml_precio is not None and pub.ml_precio != prod.ml_precio:
+            pub.ml_precio = prod.ml_precio
+            changed = True
+        if prod.ml_permalink and pub.ml_permalink != prod.ml_permalink:
+            pub.ml_permalink = prod.ml_permalink
+            changed = True
+        # Marcamos el snapshot como sincronizado al timestamp del producto
+        # (no a now() — eso sería mentira: no fuimos a ML).
+        pub.ml_last_synced_at = prod_synced
+
+        if changed:
+            n_actualizadas += 1
+        else:
+            n_sin_cambio += 1
+
+    db.commit()
+    return {
+        "n_publicaciones": len(pubs),
+        "n_actualizadas": n_actualizadas,
+        "n_sin_cambio": n_sin_cambio,
+        "n_sin_producto": n_sin_producto,
+    }
+
+
 def refresh_status_from_ml(
     db: Session,
     skus: list[str],
@@ -302,7 +385,13 @@ def refresh_status_from_ml(
     Para cada SKU, hace GET /items/{id} y actualiza ml_status, ml_stock,
     ml_precio, ml_last_synced_at locales con lo que ML reporta.
     Útil cuando ML pausó publicaciones por stock=0 y queremos sincronizar.
+
+    Actualiza AMBAS tablas: `productos` (snapshot principal) y
+    `producto_publicaciones_ml` (snapshot que ve /publicaciones).
     """
+    from decimal import Decimal
+    from .models import ProductoPublicacionML as _PPML
+
     n_ok = 0
     errores: list[str] = []
     for sku in skus:
@@ -317,16 +406,52 @@ def refresh_status_from_ml(
             continue
         try:
             item = ml_client.get_item(db, prod.ml_item_id)
-            prod.ml_status = item.get("status")
-            prod.ml_stock = item.get("available_quantity")
+            now_utc = datetime.now(timezone.utc)
+
+            new_status = item.get("status")
+            new_aq_raw = item.get("available_quantity")
+            new_aq: int | None = None
+            if new_aq_raw is not None:
+                try:
+                    new_aq = int(new_aq_raw)
+                except (ValueError, TypeError):
+                    new_aq = None
+            new_price_decimal: Decimal | None = None
             price = item.get("price")
             if price is not None:
-                from decimal import Decimal
                 try:
-                    prod.ml_precio = Decimal(str(price))
+                    new_price_decimal = Decimal(str(price))
                 except Exception:
-                    pass
-            prod.ml_last_synced_at = datetime.now(timezone.utc)
+                    new_price_decimal = None
+
+            # Snapshot 1: tabla productos
+            if new_status is not None:
+                prod.ml_status = new_status
+            if new_aq is not None:
+                prod.ml_stock = new_aq
+            if new_price_decimal is not None:
+                prod.ml_precio = new_price_decimal
+            prod.ml_last_synced_at = now_utc
+
+            # Snapshot 2: tabla producto_publicaciones_ml (lo que ve /publicaciones)
+            try:
+                pub = db.execute(
+                    select(_PPML).where(_PPML.ml_item_id == prod.ml_item_id)
+                ).scalar_one_or_none()
+                if pub is not None:
+                    if new_status is not None:
+                        pub.ml_status = str(new_status)
+                    if new_aq is not None:
+                        pub.ml_stock_snapshot = new_aq
+                    if new_price_decimal is not None:
+                        pub.ml_precio = new_price_decimal
+                    if item.get("permalink"):
+                        pub.ml_permalink = str(item["permalink"])[:512]
+                    pub.ml_last_synced_at = now_utc
+            except Exception as e:
+                # Loguear pero no abortar el sync principal
+                print(f"[refresh_status_from_ml] PPML propagation falló {sku}: {e}")
+
             n_ok += 1
         except Exception as e:
             errores.append(f"{sku}: {type(e).__name__}: {str(e)[:150]}")

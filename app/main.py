@@ -47,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.51.4"
+APP_VERSION = "0.51.5"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -2713,6 +2713,41 @@ def publicaciones_list(
             "flash": flash,
         },
     )
+
+
+@app.post("/publicaciones/resync-snapshots")
+def publicaciones_resync_snapshots(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Repara drift entre `productos.ml_*` y `producto_publicaciones_ml.ml_*`
+    copiando el snapshot del producto a la fila correspondiente de la
+    publicación cuando el del producto es más reciente.
+
+    No hace llamadas a ML. Rápido. Útil para limpiar el drift histórico
+    generado antes del fix v0.51.5.
+    """
+    try:
+        summary = publicaciones.resync_publicaciones_from_productos(db)
+        request.session["flash"] = {
+            "type": "success",
+            "msg": (
+                f"✓ Resync local: {summary['n_actualizadas']} publicación(es) "
+                f"actualizada(s), {summary['n_sin_cambio']} sin cambio, "
+                f"{summary['n_sin_producto']} huérfanas "
+                f"de {summary['n_publicaciones']} totales."
+            ),
+        }
+    except Exception as e:
+        import traceback as _tb
+        _tb.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Resync falló: {type(e).__name__}: {str(e)[:200]}",
+        }
+    return RedirectResponse("/publicaciones", status_code=303)
 
 
 @app.post("/publicaciones/bulk/pausar")
