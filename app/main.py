@@ -47,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.51.2"
+APP_VERSION = "0.51.3"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -420,18 +420,16 @@ def precios_historial_view(
     - Si `item_id` viene: muestra el histórico completo de ese item.
     - Si no: lista los cambios recientes del catálogo entero.
 
-    Hardcodeado defensivo: cada query individual está envuelta en try/except
-    para que un error en un agregado (ej: tabla recién creada vacía, columna
-    faltante por migración pendiente) no rompa toda la página. Si todo falla
-    se renderiza la página con stats en 0 y un mensaje de error en `flash`.
+    Envuelto en try/except enorme + fallback HTML simple si Jinja falla:
+    así nunca tira 500 — siempre rinde algo, aunque sea un mensaje de error.
     """
-    import traceback
+    import traceback as _traceback
     from sqlalchemy import select as _select, func as _func
     from .models import MLPriceSnapshot
 
     item_id = (item_id or "").strip()
-    snaps = []
-    cambios_globales = []
+    snaps: list = []
+    cambios_globales: list = []
     modo = "globales"
     ultimo_snap = None
     total_snaps = 0
@@ -448,11 +446,10 @@ def precios_historial_view(
             modo = "globales"
     except Exception as e:
         error_msg = f"No pude cargar el historial: {type(e).__name__}"
-        error_detail = traceback.format_exc()
+        error_detail = _traceback.format_exc()
         print(f"[/precios-historial] error en query principal: {error_detail}")
 
-    # Stats — cada uno aislado para no caerse el bloque completo si una columna
-    # no existe.
+    # Stats — cada uno aislado.
     try:
         ultimo_snap = db.execute(
             _select(_func.max(MLPriceSnapshot.captured_at))
@@ -461,7 +458,7 @@ def precios_historial_view(
         print(f"[/precios-historial] ultimo_snap error: {e}")
         if not error_msg:
             error_msg = f"No pude leer ml_price_snapshots: {type(e).__name__}"
-            error_detail = traceback.format_exc()
+            error_detail = _traceback.format_exc()
     try:
         total_snaps = db.execute(
             _select(_func.count(MLPriceSnapshot.id))
@@ -475,22 +472,53 @@ def precios_historial_view(
     except Exception as e:
         print(f"[/precios-historial] items_trackeados error: {e}")
 
-    return templates.TemplateResponse(
-        "precios_historial.html",
-        {
-            "request": request,
-            "modo": modo,
-            "item_id": item_id,
-            "snaps": snaps,
-            "cambios_globales": cambios_globales,
-            "ultimo_snapshot": ultimo_snap,
-            "total_snaps": total_snaps,
-            "items_trackeados": items_trackeados,
-            "days": days,
-            "error_msg": error_msg,
-            "error_detail": error_detail,
-        },
-    )
+    # Render del template — TAMBIÉN en try/except. Si Jinja explota, devolvemos
+    # un HTML mínimo con el traceback visible para diagnóstico inmediato.
+    try:
+        return templates.TemplateResponse(
+            "precios_historial.html",
+            {
+                "request": request,
+                "user": user,
+                "modo": modo,
+                "item_id": item_id,
+                "snaps": snaps,
+                "cambios_globales": cambios_globales,
+                "ultimo_snapshot": ultimo_snap,
+                "total_snaps": total_snaps,
+                "items_trackeados": items_trackeados,
+                "days": days,
+                "error_msg": error_msg,
+                "error_detail": error_detail,
+            },
+        )
+    except Exception as e:
+        tb = _traceback.format_exc()
+        print(f"[/precios-historial] TEMPLATE error: {tb}")
+        # HTML mínimo de fallback con el traceback visible.
+        fallback_html = f"""<!DOCTYPE html>
+<html><head><title>Histórico de precios - error</title>
+<style>body{{font-family:system-ui,sans-serif;padding:24px;background:#1a1a1a;color:#eee;}}
+.err{{background:#3a1a1a;border:1px solid #8b2c2c;padding:16px;border-radius:6px;margin-bottom:18px;}}
+.err strong{{color:#ff6b6b;}}
+pre{{background:#0d0d0d;padding:12px;border-radius:4px;overflow:auto;max-height:600px;font-size:11px;color:#ccc;}}
+a{{color:#ff6b6b;}}</style></head>
+<body>
+<h1>Histórico de precios — error de render</h1>
+<div class="err">
+<strong>El template falló al renderizar.</strong><br>
+{type(e).__name__}: {str(e)[:300]}<br><br>
+<a href="/">← Volver al inicio</a>
+</div>
+<h3>Traceback del template:</h3>
+<pre>{tb}</pre>
+<h3>Errores previos en queries:</h3>
+<pre>{error_detail or "(ninguno)"}</pre>
+<h3>Datos:</h3>
+<pre>modo={modo} | snaps={len(snaps)} | cambios_globales={len(cambios_globales)}
+ultimo_snap={ultimo_snap} | total_snaps={total_snaps} | items_trackeados={items_trackeados}</pre>
+</body></html>"""
+        return HTMLResponse(content=fallback_html, status_code=200)
 
 
 # ===============================================================
