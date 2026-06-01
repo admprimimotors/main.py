@@ -47,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.51.3"
+APP_VERSION = "0.51.4"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -476,9 +476,9 @@ def precios_historial_view(
     # un HTML mínimo con el traceback visible para diagnóstico inmediato.
     try:
         return templates.TemplateResponse(
+            request,
             "precios_historial.html",
             {
-                "request": request,
                 "user": user,
                 "modo": modo,
                 "item_id": item_id,
