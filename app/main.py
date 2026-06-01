@@ -47,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.50.1"
+APP_VERSION = "0.51.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -2822,10 +2822,35 @@ _PRECIOS_FORM_DEFAULTS = {
     "valor": "",
     "target": "final",
     "redondeo": 0,
+    # Filtros básicos
     "search": "",
     "categoria": "",
     "marca": "",
     "vinculadas": "",
+    # Filtros SKU
+    "sku_exact": "",
+    "sku_contains": "",
+    "sku_ml_exact": "",
+    "sku_ml_contains": "",
+    "titulo_contains": "",
+    # Rangos
+    "precio_costo_min": "",
+    "precio_costo_max": "",
+    "precio_final_min": "",
+    "precio_final_max": "",
+    "stock_min": "",
+    "stock_max": "",
+    "margen_min": "",
+    "margen_max": "",
+    # ML específicos
+    "ml_status": "",
+    "tiene_sku_ml": "",
+    "ml_category_id": "",
+    # Ficha técnica
+    "ficha_key": "",
+    "ficha_value": "",
+    # Auto-push toggle (default ON al cargar pantalla vacía)
+    "push_ml": "on",
 }
 
 
@@ -2866,6 +2891,61 @@ def precios_view(
     return _precios_render(request, user, db, form=dict(_PRECIOS_FORM_DEFAULTS))
 
 
+def _parse_dec_optional(v: str):
+    """Parse Decimal optional. '' o None → None."""
+    from decimal import Decimal, InvalidOperation
+    if not v or not v.strip():
+        return None
+    try:
+        return Decimal(v.strip().replace(",", "."))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _parse_int_optional(v: str):
+    if not v or not v.strip():
+        return None
+    try:
+        return int(v.strip())
+    except ValueError:
+        return None
+
+
+def _collect_precios_filters(
+    search, categoria, marca, vinculadas,
+    sku_exact, sku_contains, sku_ml_exact, sku_ml_contains, titulo_contains,
+    precio_costo_min, precio_costo_max, precio_final_min, precio_final_max,
+    stock_min, stock_max, margen_min, margen_max,
+    ml_status, tiene_sku_ml, ml_category_id,
+    ficha_key, ficha_value,
+):
+    """Empaqueta los filtros del form en un dict con tipos correctos."""
+    return {
+        "search": search,
+        "categoria": categoria,
+        "marca": marca,
+        "vinculadas": vinculadas,
+        "sku_exact": sku_exact,
+        "sku_contains": sku_contains,
+        "sku_ml_exact": sku_ml_exact,
+        "sku_ml_contains": sku_ml_contains,
+        "titulo_contains": titulo_contains,
+        "precio_costo_min": _parse_dec_optional(precio_costo_min),
+        "precio_costo_max": _parse_dec_optional(precio_costo_max),
+        "precio_final_min": _parse_dec_optional(precio_final_min),
+        "precio_final_max": _parse_dec_optional(precio_final_max),
+        "stock_min": _parse_int_optional(stock_min),
+        "stock_max": _parse_int_optional(stock_max),
+        "margen_min": _parse_dec_optional(margen_min),
+        "margen_max": _parse_dec_optional(margen_max),
+        "ml_status": ml_status,
+        "tiene_sku_ml": tiene_sku_ml,
+        "ml_category_id": ml_category_id,
+        "ficha_key": ficha_key,
+        "ficha_value": ficha_value,
+    }
+
+
 @app.post("/precios/preview", response_class=HTMLResponse)
 def precios_preview(
     request: Request,
@@ -2873,25 +2953,79 @@ def precios_preview(
     valor: str = Form(...),
     target: str = Form(...),
     redondeo: str = Form(default="0"),
+    # Filtros básicos
     search: str = Form(default=""),
     categoria: str = Form(default=""),
     marca: str = Form(default=""),
     vinculadas: str = Form(default=""),
+    # Filtros SKU
+    sku_exact: str = Form(default=""),
+    sku_contains: str = Form(default=""),
+    sku_ml_exact: str = Form(default=""),
+    sku_ml_contains: str = Form(default=""),
+    titulo_contains: str = Form(default=""),
+    # Rangos
+    precio_costo_min: str = Form(default=""),
+    precio_costo_max: str = Form(default=""),
+    precio_final_min: str = Form(default=""),
+    precio_final_max: str = Form(default=""),
+    stock_min: str = Form(default=""),
+    stock_max: str = Form(default=""),
+    margen_min: str = Form(default=""),
+    margen_max: str = Form(default=""),
+    # ML específicos
+    ml_status: str = Form(default=""),
+    tiene_sku_ml: str = Form(default=""),
+    ml_category_id: str = Form(default=""),
+    # Ficha técnica
+    ficha_key: str = Form(default=""),
+    ficha_value: str = Form(default=""),
+    # Auto-push toggle
+    push_ml: str = Form(default="on"),
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
     """Calcula los cambios sin aplicarlos y muestra preview."""
     from decimal import Decimal, InvalidOperation
 
+    filters = _collect_precios_filters(
+        search, categoria, marca, vinculadas,
+        sku_exact, sku_contains, sku_ml_exact, sku_ml_contains, titulo_contains,
+        precio_costo_min, precio_costo_max, precio_final_min, precio_final_max,
+        stock_min, stock_max, margen_min, margen_max,
+        ml_status, tiene_sku_ml, ml_category_id,
+        ficha_key, ficha_value,
+    )
+
     form = {
         "operacion": operacion,
         "valor": valor,
         "target": target,
         "redondeo": int(redondeo) if redondeo.isdigit() else 0,
+        # Mantener strings originales para repopular el form
         "search": search,
         "categoria": categoria,
         "marca": marca,
         "vinculadas": vinculadas,
+        "sku_exact": sku_exact,
+        "sku_contains": sku_contains,
+        "sku_ml_exact": sku_ml_exact,
+        "sku_ml_contains": sku_ml_contains,
+        "titulo_contains": titulo_contains,
+        "precio_costo_min": precio_costo_min,
+        "precio_costo_max": precio_costo_max,
+        "precio_final_min": precio_final_min,
+        "precio_final_max": precio_final_max,
+        "stock_min": stock_min,
+        "stock_max": stock_max,
+        "margen_min": margen_min,
+        "margen_max": margen_max,
+        "ml_status": ml_status,
+        "tiene_sku_ml": tiene_sku_ml,
+        "ml_category_id": ml_category_id,
+        "ficha_key": ficha_key,
+        "ficha_value": ficha_value,
+        "push_ml": push_ml,
     }
 
     try:
@@ -2910,11 +3044,8 @@ def precios_preview(
             valor=valor_dec,
             target=target,
             redondeo=form["redondeo"],
-            search=search,
-            categoria=categoria,
-            marca=marca,
-            vinculadas=vinculadas,
             return_preview=True,
+            **filters,
         )
     except Exception as e:
         import traceback
@@ -2935,17 +3066,42 @@ def precios_apply(
     valor: str = Form(...),
     target: str = Form(...),
     redondeo: str = Form(default="0"),
+    # Filtros básicos
     search: str = Form(default=""),
     categoria: str = Form(default=""),
     marca: str = Form(default=""),
     vinculadas: str = Form(default=""),
+    # Filtros SKU
+    sku_exact: str = Form(default=""),
+    sku_contains: str = Form(default=""),
+    sku_ml_exact: str = Form(default=""),
+    sku_ml_contains: str = Form(default=""),
+    titulo_contains: str = Form(default=""),
+    # Rangos
+    precio_costo_min: str = Form(default=""),
+    precio_costo_max: str = Form(default=""),
+    precio_final_min: str = Form(default=""),
+    precio_final_max: str = Form(default=""),
+    stock_min: str = Form(default=""),
+    stock_max: str = Form(default=""),
+    margen_min: str = Form(default=""),
+    margen_max: str = Form(default=""),
+    # ML específicos
+    ml_status: str = Form(default=""),
+    tiene_sku_ml: str = Form(default=""),
+    ml_category_id: str = Form(default=""),
+    # Ficha técnica
+    ficha_key: str = Form(default=""),
+    ficha_value: str = Form(default=""),
+    # Auto-push toggle (default ON)
+    push_ml: str = Form(default=""),
     user: str = Depends(auth.require_user),
     db: DbSession = Depends(get_db),
 ):
     """
     Re-computa los cambios con los mismos parámetros y los aplica.
-    Re-computar (vs guardar la lista del preview) garantiza coherencia
-    si la DB cambió entre preview y apply (race condition mínima).
+    Si `push_ml` está activo (checkbox marcado), después del apply
+    pushea el precio a ML para cada SKU vinculado.
     """
     from decimal import Decimal, InvalidOperation
 
@@ -2958,6 +3114,15 @@ def precios_apply(
         }
         return RedirectResponse("/precios", status_code=303)
 
+    filters = _collect_precios_filters(
+        search, categoria, marca, vinculadas,
+        sku_exact, sku_contains, sku_ml_exact, sku_ml_contains, titulo_contains,
+        precio_costo_min, precio_costo_max, precio_final_min, precio_final_max,
+        stock_min, stock_max, margen_min, margen_max,
+        ml_status, tiene_sku_ml, ml_category_id,
+        ficha_key, ficha_value,
+    )
+
     redondeo_int = int(redondeo) if redondeo.isdigit() else 0
 
     try:
@@ -2967,10 +3132,7 @@ def precios_apply(
             valor=valor_dec,
             target=target,
             redondeo=redondeo_int,
-            search=search,
-            categoria=categoria,
-            marca=marca,
-            vinculadas=vinculadas,
+            **filters,
         )
         aplicados = precios.apply_precio_changes(db, changes)
     except Exception as e:
@@ -2986,14 +3148,66 @@ def precios_apply(
         }
         return RedirectResponse("/precios", status_code=303)
 
-    request.session["flash"] = {
-        "type": "success",
-        "msg": (
-            f"✓ {aplicados} producto{'' if aplicados == 1 else 's'} actualizado{'' if aplicados == 1 else 's'} "
-            f"con {len(changes)} cambio{'' if len(changes) == 1 else 's'} de precio. "
-            "Para sincronizar con ML, andá a /catalogo y usá ↑ Push masivo."
-        ),
-    }
+    # ---- Auto-push a ML (si toggle ON y write enabled) ----
+    push_enabled = bool(push_ml) and ml_client.is_write_enabled()
+    push_ok = 0
+    push_fail = 0
+    push_skip = 0  # productos sin vínculo a ML
+    push_errors_sample: list[str] = []
+
+    if push_enabled and changes:
+        import time
+        from sqlalchemy import select as _sel
+        from .models import Producto as _Prod
+        # Únicos SKUs que cambiaron (puede haber 2 changes por SKU: costo + final)
+        skus_changed = list({c.sku for c in changes})
+        # Pre-fetch para chequear cuáles están vinculados a ML
+        prods = db.execute(
+            _sel(_Prod.sku, _Prod.ml_item_id).where(_Prod.sku.in_(skus_changed))
+        ).all()
+        prod_map = {sku: ml_id for sku, ml_id in prods}
+        for sku in skus_changed:
+            if not prod_map.get(sku):
+                push_skip += 1
+                continue
+            try:
+                ok, msg = catalogo.push_to_ml(
+                    db, sku, push_stock=False, push_price=True, auto_activate=False
+                )
+                if ok:
+                    push_ok += 1
+                else:
+                    push_fail += 1
+                    if len(push_errors_sample) < 5:
+                        push_errors_sample.append(f"{sku}: {msg[:100]}")
+            except Exception as e:
+                push_fail += 1
+                if len(push_errors_sample) < 5:
+                    push_errors_sample.append(f"{sku}: {type(e).__name__}: {str(e)[:80]}")
+            time.sleep(0.3)  # rate-limit suave ML
+
+    # ---- Armar flash final ----
+    parts = [f"✓ {aplicados} producto{'' if aplicados == 1 else 's'} actualizado{'' if aplicados == 1 else 's'} con {len(changes)} cambio{'' if len(changes) == 1 else 's'} de precio"]
+    if push_enabled:
+        if push_ok:
+            parts.append(f"↑ {push_ok} pusheado{'' if push_ok == 1 else 's'} a ML")
+        if push_skip:
+            parts.append(f"{push_skip} sin vincular a ML")
+        if push_fail:
+            parts.append(f"⚠ {push_fail} con error de push")
+    elif not push_ml:
+        parts.append("(push a ML desactivado)")
+    else:
+        parts.append("(push a ML deshabilitado a nivel sistema)")
+
+    msg = " · ".join(parts) + "."
+    if push_errors_sample:
+        msg += " Errores: " + "; ".join(push_errors_sample)
+        if push_fail > len(push_errors_sample):
+            msg += f" (+{push_fail - len(push_errors_sample)} más)"
+
+    flash_type = "warning" if push_fail else "success"
+    request.session["flash"] = {"type": flash_type, "msg": msg}
     return RedirectResponse("/precios", status_code=303)
 
 
@@ -4045,3 +4259,29 @@ def buscar_categoria_page(
             "version": APP_VERSION,
         },
     )
+
+
+# ===============================================================
+# TEMPORAL — endpoint para extraer el access_token vigente.
+# Solo lo dejamos hasta terminar el push manual de compats de bujías.
+# DESPUÉS BORRAR — no debería quedar en producción.
+# ===============================================================
+
+@app.get("/admin/ml-token-temporal")
+def admin_ml_token_temporal(
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Devuelve el access_token de ML vigente para uso manual desde fuera del sistema."""
+    try:
+        token = ml_client.get_access_token(db)
+        return JSONResponse({
+            "ok": True,
+            "access_token": token,
+            "warning": "TEMPORAL — borrar este endpoint cuando termine el push manual de compats.",
+        })
+    except Exception as e:
+        return JSONResponse(
+            {"ok": False, "error": f"{type(e).__name__}: {e}"},
+            status_code=500,
+        )

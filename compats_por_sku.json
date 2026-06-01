@@ -1,0 +1,611 @@
+{
+  "GN1010": [
+    {
+      "marca": "Fiat",
+      "modelo": "FIAT TITANO",
+      "ltr": null,
+      "cv": "200",
+      "fecha": "11.25"
+    },
+    {
+      "marca": "Fiat",
+      "modelo": "FIAT TORO",
+      "ltr": null,
+      "cv": "200",
+      "fecha": "02.26"
+    },
+    {
+      "marca": "Ram",
+      "modelo": "RAM DAKOTA",
+      "ltr": null,
+      "cv": "200",
+      "fecha": "11.25"
+    }
+  ],
+  "GN1015": [
+    {
+      "marca": "Audi",
+      "modelo": "A3",
+      "ltr": null,
+      "cv": "170",
+      "fecha": "03.06-08.12"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "A4",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "11.05-06.08"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "PASSAT",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "03.05-07.10"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VENTO",
+      "ltr": null,
+      "cv": "170",
+      "fecha": "10.06-"
+    }
+  ],
+  "GN1017": [
+    {
+      "marca": "Audi",
+      "modelo": "A3",
+      "ltr": null,
+      "cv": "170",
+      "fecha": "06.05-06.08"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "A4",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "11.04-06.08"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "MULTIVAN",
+      "ltr": null,
+      "cv": "175",
+      "fecha": "01.08-03.11"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "PASSAT",
+      "ltr": null,
+      "cv": "140",
+      "fecha": "03.05-05.09"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "SHARAN",
+      "ltr": null,
+      "cv": "140",
+      "fecha": "11.05-03.10"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "TOUAREG",
+      "ltr": null,
+      "cv": "175",
+      "fecha": "01.03-01.06"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "TOUAREG",
+      "ltr": null,
+      "cv": "310",
+      "fecha": "11.04-05.10"
+    }
+  ],
+  "GSE114": [
+    {
+      "marca": "Jeep",
+      "modelo": "JEEP GRAND CHEROKEE III",
+      "ltr": null,
+      "cv": "215",
+      "fecha": "06.05-12.10"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MERCEDES BENZ C320",
+      "ltr": null,
+      "cv": "220",
+      "fecha": "01.05-12.13"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MERCEDES BENZ E320",
+      "ltr": null,
+      "cv": "220",
+      "fecha": "03.05-07.09"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB ML280, ML300",
+      "ltr": null,
+      "cv": "190/230",
+      "fecha": "07.05-06.11"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB ML320, ML350",
+      "ltr": null,
+      "cv": "190/230",
+      "fecha": "07.05-06.11"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB SPRINTER",
+      "ltr": null,
+      "cv": "—",
+      "fecha": "—"
+    }
+  ],
+  "GSE140": [
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB C200 y C220",
+      "ltr": null,
+      "cv": "102/143",
+      "fecha": "03.93-08.07"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB C Sportcoupe 200",
+      "ltr": null,
+      "cv": "140",
+      "fecha": "03.01-03.09"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB C Sportcoupe 220",
+      "ltr": null,
+      "cv": "140",
+      "fecha": "03.01-03.09"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB SPRINTER T1N",
+      "ltr": null,
+      "cv": "—",
+      "fecha": "-03.1"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB VIANO Y VITO",
+      "ltr": null,
+      "cv": "105/115",
+      "fecha": "03.99-03.14"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB VIANO Y VITO",
+      "ltr": null,
+      "cv": "140",
+      "fecha": "03.99-03.14"
+    }
+  ],
+  "GSE152": [
+    {
+      "marca": "Audi",
+      "modelo": "AUDI A3",
+      "ltr": null,
+      "cv": "140",
+      "fecha": "05.03-08.12"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "AUDI A4",
+      "ltr": null,
+      "cv": "—",
+      "fecha": "05.15-"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "AUDI Q3",
+      "ltr": null,
+      "cv": "140/177",
+      "fecha": "09.11-10.18"
+    },
+    {
+      "marca": "Seat",
+      "modelo": "SEAT ALHAMBRA, IBIZA, CÓRDOBA",
+      "ltr": null,
+      "cv": "90/131",
+      "fecha": "—"
+    },
+    {
+      "marca": "Seat",
+      "modelo": "SEAT ALHAMBRA, ALTEA, TOLEDO, LEON",
+      "ltr": null,
+      "cv": "140",
+      "fecha": "—"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW AMAROK",
+      "ltr": null,
+      "cv": "140/180",
+      "fecha": "09.10-"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW BORA",
+      "ltr": null,
+      "cv": "90/115",
+      "fecha": "—"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW PASSAT",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "03.05-08.10"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW TIGUAN",
+      "ltr": null,
+      "cv": "140",
+      "fecha": "—"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW VENTO",
+      "ltr": null,
+      "cv": "110/140",
+      "fecha": "—"
+    }
+  ],
+  "H0903": [
+    {
+      "marca": "Fiat",
+      "modelo": "FIAT DUCATO",
+      "ltr": null,
+      "cv": "109/116",
+      "fecha": "03.94-04.02"
+    },
+    {
+      "marca": "Fiat",
+      "modelo": "FIAT DUCATO",
+      "ltr": null,
+      "cv": "114",
+      "fecha": "01.05-03.11"
+    },
+    {
+      "marca": "Iveco",
+      "modelo": "IVECO DAILY II",
+      "ltr": null,
+      "cv": "103/116",
+      "fecha": "01.89-05.99"
+    },
+    {
+      "marca": "Iveco",
+      "modelo": "IVECO DAILY III",
+      "ltr": null,
+      "cv": "105/106",
+      "fecha": "03.98-10.09"
+    },
+    {
+      "marca": "Peugeot",
+      "modelo": "PEUGEOT BOXER",
+      "ltr": null,
+      "cv": "—",
+      "fecha": "-03.08"
+    },
+    {
+      "marca": "Renault",
+      "modelo": "RENAULT MÁSTER DTI",
+      "ltr": null,
+      "cv": "114",
+      "fecha": "07.98-"
+    }
+  ],
+  "H1815": [
+    {
+      "marca": "Citroen",
+      "modelo": "CITROËN JUMPER HDI",
+      "ltr": null,
+      "cv": "110/148",
+      "fecha": "09.09-03.18"
+    },
+    {
+      "marca": "Fiat",
+      "modelo": "FIAT DUCATO",
+      "ltr": null,
+      "cv": "110/148",
+      "fecha": "09.09-"
+    },
+    {
+      "marca": "Iveco",
+      "modelo": "IVECO DAILY III",
+      "ltr": null,
+      "cv": "110/156",
+      "fecha": "03.98-"
+    },
+    {
+      "marca": "Iveco",
+      "modelo": "IVECO DAILY IV",
+      "ltr": null,
+      "cv": "110/156",
+      "fecha": "03.98-"
+    },
+    {
+      "marca": "Iveco",
+      "modelo": "IVECO DAILY V",
+      "ltr": null,
+      "cv": "110/156",
+      "fecha": "03.98-"
+    },
+    {
+      "marca": "Peugeot",
+      "modelo": "PEUGEOT BOXER",
+      "ltr": null,
+      "cv": "110/148",
+      "fecha": "09.09-03.18"
+    }
+  ],
+  "H5015": [
+    {
+      "marca": "Citroen",
+      "modelo": "CITROËN JUMPER",
+      "ltr": null,
+      "cv": "130",
+      "fecha": "08.17-"
+    },
+    {
+      "marca": "Ford",
+      "modelo": "FORD RANGER",
+      "ltr": null,
+      "cv": "125/150",
+      "fecha": "07.12-"
+    },
+    {
+      "marca": "Ford",
+      "modelo": "FORD RANGER",
+      "ltr": null,
+      "cv": "200",
+      "fecha": "07.12-"
+    },
+    {
+      "marca": "Ford",
+      "modelo": "FORD RANGER",
+      "ltr": null,
+      "cv": "125/135",
+      "fecha": "07.14-"
+    },
+    {
+      "marca": "Peugeot",
+      "modelo": "PEUGEOT BOXER",
+      "ltr": null,
+      "cv": "130",
+      "fecha": "09.17-"
+    }
+  ],
+  "H5261": [
+    {
+      "marca": "Ford",
+      "modelo": "FORD RANGER",
+      "ltr": null,
+      "cv": "170",
+      "fecha": "04.23-"
+    },
+    {
+      "marca": "Ford",
+      "modelo": "FORD RANGER",
+      "ltr": null,
+      "cv": "210",
+      "fecha": "04.23-"
+    },
+    {
+      "marca": "Ford",
+      "modelo": "FORD RANGER",
+      "ltr": null,
+      "cv": "213",
+      "fecha": "07.19-03.23"
+    }
+  ],
+  "GN1013": [
+    {
+      "marca": "Toyota",
+      "modelo": "TOYOTA HILUX",
+      "ltr": null,
+      "cv": "150",
+      "fecha": "11.15-"
+    },
+    {
+      "marca": "Toyota",
+      "modelo": "TOYOTA HILUX",
+      "ltr": null,
+      "cv": "177/204/224",
+      "fecha": "11.15-"
+    },
+    {
+      "marca": "Toyota",
+      "modelo": "TOYOTA HIACE",
+      "ltr": null,
+      "cv": "177",
+      "fecha": "09.19-"
+    },
+    {
+      "marca": "Toyota",
+      "modelo": "TOYOTA SW4",
+      "ltr": null,
+      "cv": "177/204/224",
+      "fecha": "12.15-"
+    }
+  ],
+  "GN1016": [
+    {
+      "marca": "Nissan",
+      "modelo": "NISSAN FRONTIER",
+      "ltr": null,
+      "cv": "170/190",
+      "fecha": "03.05-03.16"
+    },
+    {
+      "marca": "Nissan",
+      "modelo": "NISSAN PATHFINDER",
+      "ltr": null,
+      "cv": "170/190",
+      "fecha": "03.05-03.10"
+    },
+    {
+      "marca": "Renault",
+      "modelo": "RENAULT MÁSTER",
+      "ltr": null,
+      "cv": "130",
+      "fecha": "05.13-"
+    }
+  ],
+  "H1122": [
+    {
+      "marca": "Jeep",
+      "modelo": "JEEP GRAND CHEROKEE III",
+      "ltr": null,
+      "cv": "215",
+      "fecha": "06.05-12.10"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MERCEDES BENZ B200",
+      "ltr": null,
+      "cv": "135",
+      "fecha": "03.05-11.07"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MERCEDES BENZ C320",
+      "ltr": null,
+      "cv": "220",
+      "fecha": "01.05-12.13"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MERCEDES BENZ E320",
+      "ltr": null,
+      "cv": "220",
+      "fecha": "03.05-07.09"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB ML280, ML300, ML320, ML350",
+      "ltr": null,
+      "cv": "190/230",
+      "fecha": "07.05-06.11"
+    },
+    {
+      "marca": "Mercedes Benz",
+      "modelo": "MB ML420, ML450",
+      "ltr": null,
+      "cv": "300",
+      "fecha": "02.06-06.11"
+    }
+  ],
+  "H1339": [
+    {
+      "marca": "Audi",
+      "modelo": "AUDI A3 Y A4",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "08.04-03.16"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "AUDI A4, A6, ALLROAD Y A7",
+      "ltr": null,
+      "cv": "233/245",
+      "fecha": "11.04-03.16"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "AUDI A6",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "09.08-03.16"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "AUDI Q3 Y Q5",
+      "ltr": null,
+      "cv": "220",
+      "fecha": "03.05-07.09"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "AUDI Q5 Y Q7",
+      "ltr": null,
+      "cv": "230/249",
+      "fecha": "03.06-"
+    },
+    {
+      "marca": "Audi",
+      "modelo": "AUDI Q7",
+      "ltr": null,
+      "cv": "340",
+      "fecha": "03.06-03.16"
+    },
+    {
+      "marca": "Porsche",
+      "modelo": "PORSCHE CAYENNE",
+      "ltr": null,
+      "cv": "240/245",
+      "fecha": "09.10-03.18"
+    },
+    {
+      "marca": "Porsche",
+      "modelo": "PORSCHE MACAN",
+      "ltr": null,
+      "cv": "240/245",
+      "fecha": "09.10-03.18"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW AMAROK",
+      "ltr": null,
+      "cv": "140/180",
+      "fecha": "03.10-"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW AMAROK",
+      "ltr": null,
+      "cv": "224/258",
+      "fecha": "03.17-"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW PASSAT, PASSAT CC Y CC",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "11.08-03.15"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW TIGUAN",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "09.05-"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW VENTO",
+      "ltr": null,
+      "cv": "140/170",
+      "fecha": "09.05-"
+    },
+    {
+      "marca": "Volkswagen",
+      "modelo": "VW TOUAREG",
+      "ltr": null,
+      "cv": "204/258",
+      "fecha": "09.10-"
+    }
+  ]
+}

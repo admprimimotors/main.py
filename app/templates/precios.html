@@ -145,11 +145,13 @@
 
     <div style="margin-top: 18px;">
       <div style="font-size: 12px; color: var(--muted); margin-bottom: 8px;">
-        Filtros de scope (los mismos del catálogo) — definen qué productos se afectan:
+        Filtros de scope — definen qué productos se afectan. <strong>Combinables (AND).</strong>
       </div>
+
+      {# Filtros básicos (siempre visibles) #}
       <div class="form-grid">
         <div class="form-row">
-          <label for="search">Buscar</label>
+          <label for="search">Buscar global</label>
           <input id="search" name="search" type="text" value="{{ form.search }}"
                  placeholder="SKU, título, marca o categoría" />
         </div>
@@ -172,7 +174,7 @@
           </select>
         </div>
         <div class="form-row">
-          <label for="vinculadas">ML</label>
+          <label for="vinculadas">Vinculadas ML</label>
           <select id="vinculadas" name="vinculadas">
             <option value="">Todas</option>
             <option value="si" {% if form.vinculadas == 'si' %}selected{% endif %}>Vinculadas</option>
@@ -180,6 +182,141 @@
           </select>
         </div>
       </div>
+
+      {# Filtros avanzados — sección colapsable #}
+      <details style="margin-top: 14px;" {% if form.sku_exact or form.sku_contains or form.sku_ml_exact or form.sku_ml_contains or form.titulo_contains or form.precio_costo_min or form.precio_costo_max or form.precio_final_min or form.precio_final_max or form.stock_min or form.stock_max or form.margen_min or form.margen_max or form.ml_status or form.tiene_sku_ml or form.ml_category_id or form.ficha_key %}open{% endif %}>
+        <summary style="cursor: pointer; font-size: 12px; color: var(--brand-hover); padding: 8px 0; user-select: none;">
+          ▾ Buscador implacable (filtros avanzados)
+        </summary>
+
+        {# SKU filters #}
+        <div style="margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--panel-2);">
+          <div style="font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; margin-bottom: 8px;">SKU</div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="sku_exact">SKU exacto</label>
+              <input id="sku_exact" name="sku_exact" type="text" value="{{ form.sku_exact or '' }}" placeholder="ej: GE100-A" />
+            </div>
+            <div class="form-row">
+              <label for="sku_contains">SKU contiene</label>
+              <input id="sku_contains" name="sku_contains" type="text" value="{{ form.sku_contains or '' }}" placeholder="ej: GE100" />
+            </div>
+            <div class="form-row">
+              <label for="sku_ml_exact">SKU_ML exacto</label>
+              <input id="sku_ml_exact" name="sku_ml_exact" type="text" value="{{ form.sku_ml_exact or '' }}" placeholder="ej: GN1017" />
+            </div>
+            <div class="form-row">
+              <label for="sku_ml_contains">SKU_ML contiene</label>
+              <input id="sku_ml_contains" name="sku_ml_contains" type="text" value="{{ form.sku_ml_contains or '' }}" placeholder="ej: GN" />
+            </div>
+            <div class="form-row">
+              <label for="titulo_contains">Título contiene</label>
+              <input id="titulo_contains" name="titulo_contains" type="text" value="{{ form.titulo_contains or '' }}" placeholder="ej: fadecya, bujía, persan" />
+            </div>
+          </div>
+        </div>
+
+        {# Rangos numéricos #}
+        <div style="margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--panel-2);">
+          <div style="font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; margin-bottom: 8px;">Rangos numéricos (min / max)</div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="precio_costo_min">Precio costo desde</label>
+              <input id="precio_costo_min" name="precio_costo_min" type="number" step="0.01" min="0" value="{{ form.precio_costo_min or '' }}" />
+            </div>
+            <div class="form-row">
+              <label for="precio_costo_max">Precio costo hasta</label>
+              <input id="precio_costo_max" name="precio_costo_max" type="number" step="0.01" min="0" value="{{ form.precio_costo_max or '' }}" />
+            </div>
+            <div class="form-row">
+              <label for="precio_final_min">Precio final desde</label>
+              <input id="precio_final_min" name="precio_final_min" type="number" step="0.01" min="0" value="{{ form.precio_final_min or '' }}" />
+            </div>
+            <div class="form-row">
+              <label for="precio_final_max">Precio final hasta</label>
+              <input id="precio_final_max" name="precio_final_max" type="number" step="0.01" min="0" value="{{ form.precio_final_max or '' }}" />
+            </div>
+            <div class="form-row">
+              <label for="stock_min">Stock desde</label>
+              <input id="stock_min" name="stock_min" type="number" step="1" min="0" value="{{ form.stock_min or '' }}" />
+            </div>
+            <div class="form-row">
+              <label for="stock_max">Stock hasta</label>
+              <input id="stock_max" name="stock_max" type="number" step="1" min="0" value="{{ form.stock_max or '' }}" />
+            </div>
+            <div class="form-row">
+              <label for="margen_min">Margen % desde</label>
+              <input id="margen_min" name="margen_min" type="number" step="0.1" value="{{ form.margen_min or '' }}" />
+            </div>
+            <div class="form-row">
+              <label for="margen_max">Margen % hasta</label>
+              <input id="margen_max" name="margen_max" type="number" step="0.1" value="{{ form.margen_max or '' }}" />
+            </div>
+          </div>
+        </div>
+
+        {# Filtros ML específicos #}
+        <div style="margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--panel-2);">
+          <div style="font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; margin-bottom: 8px;">Mercado Libre</div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="ml_status">ML Status</label>
+              <select id="ml_status" name="ml_status">
+                <option value="">Cualquiera</option>
+                <option value="active" {% if form.ml_status == 'active' %}selected{% endif %}>Activa</option>
+                <option value="paused" {% if form.ml_status == 'paused' %}selected{% endif %}>Pausada</option>
+                <option value="closed" {% if form.ml_status == 'closed' %}selected{% endif %}>Cerrada</option>
+                <option value="under_review" {% if form.ml_status == 'under_review' %}selected{% endif %}>En revisión</option>
+                <option value="sin_publicar" {% if form.ml_status == 'sin_publicar' %}selected{% endif %}>Sin publicar</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="tiene_sku_ml">Tiene SKU_ML</label>
+              <select id="tiene_sku_ml" name="tiene_sku_ml">
+                <option value="">Cualquiera</option>
+                <option value="si" {% if form.tiene_sku_ml == 'si' %}selected{% endif %}>Sí</option>
+                <option value="no" {% if form.tiene_sku_ml == 'no' %}selected{% endif %}>No</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="ml_category_id">ML Category ID</label>
+              <input id="ml_category_id" name="ml_category_id" type="text" value="{{ form.ml_category_id or '' }}" placeholder="ej: MLA1234" />
+            </div>
+          </div>
+        </div>
+
+        {# Ficha técnica (JSONB) #}
+        <div style="margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--panel-2);">
+          <div style="font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; margin-bottom: 8px;">Ficha técnica (matchea JSONB de cada producto)</div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="ficha_key">Campo (key)</label>
+              <input id="ficha_key" name="ficha_key" type="text" value="{{ form.ficha_key or '' }}" placeholder="ej: voltaje, diametro_mm, marca_motor" />
+            </div>
+            <div class="form-row">
+              <label for="ficha_value">Valor contiene</label>
+              <input id="ficha_value" name="ficha_value" type="text" value="{{ form.ficha_value or '' }}" placeholder="ej: 12V, 75, beru" />
+              <span class="helper">Match case-insensitive parcial. Solo aplica si los dos campos tienen valor.</span>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    {# Toggle push automático a ML #}
+    <div style="margin-top: 16px; padding: 12px 14px; border-radius: 8px; border: 1px solid rgba(160,25,22,.30); background: rgba(160,25,22,.05);">
+      <label style="display: flex; gap: 10px; align-items: flex-start; cursor: pointer; font-size: 13px;">
+        <input type="checkbox" name="push_ml" value="on" {% if form.push_ml != '' %}checked{% endif %}
+               style="margin-top: 3px; accent-color: var(--brand);" />
+        <span>
+          <strong style="color: var(--text);">Pushear automáticamente a Mercado Libre</strong>
+          <span style="display: block; color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5;">
+            Al aplicar, además de actualizar el sistema, se pushean los precios nuevos
+            a las publicaciones vinculadas en ML (1 PUT por SKU, rate-limit suave ~0.3s/req).
+            Los productos sin vincular a ML solo se actualizan local.
+          </span>
+        </span>
+      </label>
     </div>
 
     <div style="margin-top: 18px; display: flex; gap: 10px; align-items: center;">
@@ -293,7 +430,7 @@
   </div>
 
   <form method="post" action="/precios/apply" style="margin-top: 18px;">
-    {# Re-pasamos los mismos params al apply #}
+    {# Re-pasamos TODOS los params al apply (buscador implacable + push toggle) #}
     <input type="hidden" name="operacion" value="{{ form.operacion }}" />
     <input type="hidden" name="valor" value="{{ form.valor }}" />
     <input type="hidden" name="target" value="{{ form.target }}" />
@@ -302,16 +439,40 @@
     <input type="hidden" name="categoria" value="{{ form.categoria }}" />
     <input type="hidden" name="marca" value="{{ form.marca }}" />
     <input type="hidden" name="vinculadas" value="{{ form.vinculadas }}" />
+    <input type="hidden" name="sku_exact" value="{{ form.sku_exact or '' }}" />
+    <input type="hidden" name="sku_contains" value="{{ form.sku_contains or '' }}" />
+    <input type="hidden" name="sku_ml_exact" value="{{ form.sku_ml_exact or '' }}" />
+    <input type="hidden" name="sku_ml_contains" value="{{ form.sku_ml_contains or '' }}" />
+    <input type="hidden" name="titulo_contains" value="{{ form.titulo_contains or '' }}" />
+    <input type="hidden" name="precio_costo_min" value="{{ form.precio_costo_min or '' }}" />
+    <input type="hidden" name="precio_costo_max" value="{{ form.precio_costo_max or '' }}" />
+    <input type="hidden" name="precio_final_min" value="{{ form.precio_final_min or '' }}" />
+    <input type="hidden" name="precio_final_max" value="{{ form.precio_final_max or '' }}" />
+    <input type="hidden" name="stock_min" value="{{ form.stock_min or '' }}" />
+    <input type="hidden" name="stock_max" value="{{ form.stock_max or '' }}" />
+    <input type="hidden" name="margen_min" value="{{ form.margen_min or '' }}" />
+    <input type="hidden" name="margen_max" value="{{ form.margen_max or '' }}" />
+    <input type="hidden" name="ml_status" value="{{ form.ml_status or '' }}" />
+    <input type="hidden" name="tiene_sku_ml" value="{{ form.tiene_sku_ml or '' }}" />
+    <input type="hidden" name="ml_category_id" value="{{ form.ml_category_id or '' }}" />
+    <input type="hidden" name="ficha_key" value="{{ form.ficha_key or '' }}" />
+    <input type="hidden" name="ficha_value" value="{{ form.ficha_value or '' }}" />
+    {% if form.push_ml != '' %}<input type="hidden" name="push_ml" value="on" />{% endif %}
     <div style="display: flex; gap: 10px; align-items: center;">
       <button type="submit" class="btn"
-              onclick="return confirm('Aplicar {{ preview.changes|length }} cambios? Los precios viejos se sobreescriben — esto NO es reversible automáticamente.');">
-        Aplicar {{ preview.changes|length }} cambio{{ '' if preview.changes|length == 1 else 's' }}
+              onclick="return confirm('Aplicar {{ preview.changes|length }} cambios? {% if form.push_ml != '' %}También se va a pushear a ML.{% endif %} Los precios viejos se sobreescriben — NO reversible automáticamente.');">
+        Aplicar {{ preview.changes|length }} cambio{{ '' if preview.changes|length == 1 else 's' }}{% if form.push_ml != '' %} + push ML{% endif %}
       </button>
       <a href="/precios" class="btn btn-ghost">Cancelar</a>
+      {% if form.push_ml == '' %}
       <span style="font-size: 12px; color: var(--muted); margin-left: auto;">
-        Después podés ir a <a href="/catalogo?{% if form.categoria %}categoria={{ form.categoria|urlencode }}&amp;{% endif %}{% if form.marca %}marca={{ form.marca|urlencode }}&amp;{% endif %}{% if form.vinculadas %}vinculadas={{ form.vinculadas }}{% endif %}" style="color: var(--brand-hover);">/catalogo con esos filtros</a>
-        y "↑ Push 50 más antiguos" para sincronizar a ML.
+        Push a ML desactivado — solo se actualiza el sistema. Para sincronizar después, andá a /catalogo "↑ Push masivo".
       </span>
+      {% else %}
+      <span style="font-size: 12px; color: #86efac; margin-left: auto;">
+        ↑ Auto-push ML activado
+      </span>
+      {% endif %}
     </div>
   </form>
   {% else %}

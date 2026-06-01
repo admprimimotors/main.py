@@ -189,11 +189,34 @@ def compute_precio_changes(
     valor: Decimal,
     target: str,
     redondeo: int = 0,
-    # Filtros de scope (mismos que /catalogo)
+    # Filtros básicos (compat con llamadas viejas)
     search: str = "",
     categoria: str = "",
     marca: str = "",
     vinculadas: str = "",
+    # Filtros SKU (buscador implacable)
+    sku_exact: str = "",
+    sku_contains: str = "",
+    sku_ml_exact: str = "",
+    sku_ml_contains: str = "",
+    # Filtro título separado del search general
+    titulo_contains: str = "",
+    # Rangos numéricos
+    precio_costo_min: Optional[Decimal] = None,
+    precio_costo_max: Optional[Decimal] = None,
+    precio_final_min: Optional[Decimal] = None,
+    precio_final_max: Optional[Decimal] = None,
+    stock_min: Optional[int] = None,
+    stock_max: Optional[int] = None,
+    margen_min: Optional[Decimal] = None,
+    margen_max: Optional[Decimal] = None,
+    # Filtros ML específicos
+    ml_status: str = "",
+    tiene_sku_ml: str = "",
+    ml_category_id: str = "",
+    # Ficha técnica (JSONB)
+    ficha_key: str = "",
+    ficha_value: str = "",
     return_preview: bool = False,
 ) -> list[PrecioChange] | PrecioPreview:
     """
@@ -201,9 +224,19 @@ def compute_precio_changes(
     Solo incluye productos `activos`.
     Excluye cambios que dejarían precio negativo o que no producen diff.
 
-    Si `return_preview=True`, devuelve un PrecioPreview con changes + diagnóstico
-    del scope (cuántos productos hay, cuántos se saltearon y por qué).
-    Si False (default), devuelve solo la lista de changes — útil para el apply.
+    El buscador es "implacable": acepta múltiples filtros combinados con AND.
+    Los filtros vacíos no aplican (`""` o `None` → ignorado).
+
+    Filtros disponibles (todos opcionales, combinables):
+      Básicos:    search (SKU+título+marca+categoría), categoria, marca, vinculadas
+      SKU:        sku_exact, sku_contains, sku_ml_exact, sku_ml_contains
+      Texto:      titulo_contains
+      Rangos:     precio_costo_min/max, precio_final_min/max, stock_min/max, margen_min/max
+      ML:         ml_status (active/paused/closed/sin_publicar), tiene_sku_ml, ml_category_id
+      Ficha:      ficha_key + ficha_value (matchea en JSONB ficha_tecnica)
+
+    Si `return_preview=True`, devuelve PrecioPreview con changes + diagnóstico.
+    Si False (default), devuelve solo la lista de changes.
     """
     if operacion not in OPERACIONES:
         raise ValueError(f"Operación inválida: {operacion}")
@@ -212,6 +245,7 @@ def compute_precio_changes(
 
     q = select(Producto).where(Producto.activo == True)  # noqa: E712
 
+    # ---- Filtros básicos ----
     if search and search.strip():
         like = f"%{search.strip()}%"
         q = q.where(or_(
@@ -229,9 +263,75 @@ def compute_precio_changes(
     elif vinculadas == "no":
         q = q.where(Producto.ml_item_id.is_(None))
 
+    # ---- Filtros SKU implacable ----
+    if sku_exact and sku_exact.strip():
+        q = q.where(Producto.sku == sku_exact.strip())
+    if sku_contains and sku_contains.strip():
+        q = q.where(Producto.sku.ilike(f"%{sku_contains.strip()}%"))
+    if sku_ml_exact and sku_ml_exact.strip():
+        q = q.where(Producto.sku_ml == sku_ml_exact.strip())
+    if sku_ml_contains and sku_ml_contains.strip():
+        q = q.where(Producto.sku_ml.ilike(f"%{sku_ml_contains.strip()}%"))
+
+    # ---- Filtro título separado ----
+    if titulo_contains and titulo_contains.strip():
+        q = q.where(Producto.titulo.ilike(f"%{titulo_contains.strip()}%"))
+
+    # ---- Rangos numéricos ----
+    if precio_costo_min is not None:
+        q = q.where(Producto.precio_costo >= precio_costo_min)
+    if precio_costo_max is not None:
+        q = q.where(Producto.precio_costo <= precio_costo_max)
+    if precio_final_min is not None:
+        q = q.where(Producto.precio_final >= precio_final_min)
+    if precio_final_max is not None:
+        q = q.where(Producto.precio_final <= precio_final_max)
+    if stock_min is not None:
+        q = q.where(Producto.stock_actual >= stock_min)
+    if stock_max is not None:
+        q = q.where(Producto.stock_actual <= stock_max)
+    # Margen se filtra post-query (necesita el cálculo final/costo).
+
+    # ---- Filtros ML específicos ----
+    if ml_status == "sin_publicar":
+        q = q.where(Producto.ml_item_id.is_(None))
+    elif ml_status:
+        q = q.where(Producto.ml_status == ml_status)
+    if tiene_sku_ml == "si":
+        q = q.where(Producto.sku_ml.is_not(None), Producto.sku_ml != "")
+    elif tiene_sku_ml == "no":
+        q = q.where(or_(Producto.sku_ml.is_(None), Producto.sku_ml == ""))
+    if ml_category_id and ml_category_id.strip():
+        q = q.where(Producto.ml_category_id == ml_category_id.strip())
+
+    # ---- Ficha técnica (JSONB containment) ----
+    # Usa el operador ->> de Postgres: ficha_tecnica->>'key' devuelve text.
+    # Match case-insensitive parcial.
+    if ficha_key and ficha_key.strip() and ficha_value and ficha_value.strip():
+        from sqlalchemy import func as sql_func
+        q = q.where(
+            sql_func.lower(Producto.ficha_tecnica[ficha_key.strip()].astext)
+                .like(f"%{ficha_value.strip().lower()}%")
+        )
+
     q = q.order_by(Producto.sku)
 
     productos = db.execute(q).scalars().all()
+
+    # ---- Filtro de margen (post-query, porque depende de cálculo) ----
+    if margen_min is not None or margen_max is not None:
+        filtered = []
+        for prod in productos:
+            m = _compute_margen(prod.precio_costo, prod.precio_final)
+            if m is None:
+                continue  # sin margen calculable
+            if margen_min is not None and m < margen_min:
+                continue
+            if margen_max is not None and m > margen_max:
+                continue
+            filtered.append(prod)
+        productos = filtered
+
     preview = PrecioPreview(scope_total=len(productos))
 
     cambia_costo = target in ("costo", "ambos", "costo_keep_margen")
