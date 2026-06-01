@@ -47,7 +47,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.51.0"
+APP_VERSION = "0.51.1"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -419,29 +419,61 @@ def precios_historial_view(
     Vista del dashboard: histórico de precios.
     - Si `item_id` viene: muestra el histórico completo de ese item.
     - Si no: lista los cambios recientes del catálogo entero.
-    """
-    item_id = (item_id or "").strip()
-    if item_id:
-        snaps = ml_price_tracker.historial_de_item(db, item_id, only_changes=False, limit=200)
-        cambios_globales = []
-        modo = "item"
-    else:
-        snaps = []
-        cambios_globales = ml_price_tracker.cambios_recientes(db, days=days, limit=100)
-        modo = "globales"
 
-    # Última fecha de snapshot global
+    Hardcodeado defensivo: cada query individual está envuelta en try/except
+    para que un error en un agregado (ej: tabla recién creada vacía, columna
+    faltante por migración pendiente) no rompa toda la página. Si todo falla
+    se renderiza la página con stats en 0 y un mensaje de error en `flash`.
+    """
+    import traceback
     from sqlalchemy import select as _select, func as _func
     from .models import MLPriceSnapshot
-    ultimo_snap = db.execute(
-        _select(_func.max(MLPriceSnapshot.captured_at))
-    ).scalar_one_or_none()
-    total_snaps = db.execute(
-        _select(_func.count(MLPriceSnapshot.id))
-    ).scalar_one_or_none() or 0
-    items_trackeados = db.execute(
-        _select(_func.count(_func.distinct(MLPriceSnapshot.ml_item_id)))
-    ).scalar_one_or_none() or 0
+
+    item_id = (item_id or "").strip()
+    snaps = []
+    cambios_globales = []
+    modo = "globales"
+    ultimo_snap = None
+    total_snaps = 0
+    items_trackeados = 0
+    error_msg: Optional[str] = None
+    error_detail: Optional[str] = None
+
+    try:
+        if item_id:
+            snaps = ml_price_tracker.historial_de_item(db, item_id, only_changes=False, limit=200) or []
+            modo = "item"
+        else:
+            cambios_globales = ml_price_tracker.cambios_recientes(db, days=days, limit=100) or []
+            modo = "globales"
+    except Exception as e:
+        error_msg = f"No pude cargar el historial: {type(e).__name__}"
+        error_detail = traceback.format_exc()
+        print(f"[/precios-historial] error en query principal: {error_detail}")
+
+    # Stats — cada uno aislado para no caerse el bloque completo si una columna
+    # no existe.
+    try:
+        ultimo_snap = db.execute(
+            _select(_func.max(MLPriceSnapshot.captured_at))
+        ).scalar()
+    except Exception as e:
+        print(f"[/precios-historial] ultimo_snap error: {e}")
+        if not error_msg:
+            error_msg = f"No pude leer ml_price_snapshots: {type(e).__name__}"
+            error_detail = traceback.format_exc()
+    try:
+        total_snaps = db.execute(
+            _select(_func.count(MLPriceSnapshot.id))
+        ).scalar() or 0
+    except Exception as e:
+        print(f"[/precios-historial] total_snaps error: {e}")
+    try:
+        items_trackeados = db.execute(
+            _select(_func.count(_func.distinct(MLPriceSnapshot.ml_item_id)))
+        ).scalar() or 0
+    except Exception as e:
+        print(f"[/precios-historial] items_trackeados error: {e}")
 
     return templates.TemplateResponse(
         "precios_historial.html",
@@ -455,6 +487,8 @@ def precios_historial_view(
             "total_snaps": total_snaps,
             "items_trackeados": items_trackeados,
             "days": days,
+            "error_msg": error_msg,
+            "error_detail": error_detail,
         },
     )
 

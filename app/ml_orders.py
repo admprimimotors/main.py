@@ -505,18 +505,29 @@ def list_movimientos(
             })
     # Remitos
     if fuente in ("", "remito"):
+        from sqlalchemy.orm import selectinload as _selectinload
+        from .models import Cliente as _Cliente  # noqa: F401  (forzar registro del mapper)
         q = (
             select(RemitoItem, Remito)
             .join(Remito, Remito.id == RemitoItem.remito_id)
+            .options(_selectinload(Remito.cliente))
             .where(Remito.fecha >= cutoff.date())
             .order_by(Remito.fecha.desc(), RemitoItem.id.desc())
         )
         if sku:
             q = q.where(RemitoItem.sku == sku)
         for it, rem in db.execute(q).all():
+            # rem.fecha puede ser date o datetime — normalizamos a datetime UTC.
+            fecha_dt = None
+            if rem.fecha:
+                f = rem.fecha
+                if isinstance(f, datetime):
+                    fecha_dt = f if f.tzinfo else f.replace(tzinfo=timezone.utc)
+                else:
+                    fecha_dt = datetime.combine(f, datetime.min.time(), tzinfo=timezone.utc)
             items.append({
                 "fuente": "Remito",
-                "fecha": datetime.combine(rem.fecha, datetime.min.time(), tzinfo=timezone.utc) if rem.fecha else None,
+                "fecha": fecha_dt,
                 "sku": it.sku,
                 "titulo": it.descripcion,
                 "cantidad": it.cantidad,
@@ -524,7 +535,7 @@ def list_movimientos(
                 "monto": float(it.subtotal) if it.subtotal else None,
                 "status": rem.estado,
                 "ml_order_id": None,
-                "buyer": rem.cliente_razon_social,
+                "buyer": (rem.cliente.razon_social if rem.cliente else None),
             })
 
     # Orden cronológico desc (las más nuevas primero)
