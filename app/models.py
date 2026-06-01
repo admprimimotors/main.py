@@ -911,3 +911,33 @@ class MLItemHistory(Base):
         ),
         Index("ix_mlitemhistory_item_fecha", "ml_item_id", "fecha_evento"),
     )
+
+
+# =============================================================
+# MLSellerCookies — cookies de sesión web del seller hub (singleton)
+# =============================================================
+
+class MLSellerCookies(Base):
+    """
+    Cookies de sesión del seller hub de ML, pegadas manualmente por el usuario
+    desde devtools del browser. Singleton (id=1 siempre).
+
+    El user las refresca cuando expiran (típicamente cada varios días).
+    Sin esto no podemos llamar a /api/seller-item-history.
+    """
+    __tablename__ = "ml_seller_cookies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # JSON con array de cookies [{name, value, domain, path}, ...]
+    cookies_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # Opcional: formato cookie string crudo "name1=val1; name2=val2"
+    cookies_raw: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Quién las pegó la última vez
+    updated_by: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    # Cuándo se pegó por última vez
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )

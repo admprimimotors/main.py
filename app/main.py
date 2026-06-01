@@ -48,7 +48,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.53.0"
+APP_VERSION = "0.53.1"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -408,6 +408,38 @@ def api_ml_prices_history(
     return JSONResponse({"ok": True, "item_id": item_id, "count": len(rows), "rows": rows})
 
 
+@app.post("/precios-historial/cookies")
+def precios_historial_save_cookies(
+    request: Request,
+    cookies_text: str = Form(...),
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Guarda cookies de sesión web de ML (pegadas por el usuario)."""
+    try:
+        res = ml_seller_session.save_cookies(
+            db, cookies_text=cookies_text, updated_by=user,
+        )
+        if res["ok"]:
+            request.session["flash"] = {
+                "type": "success",
+                "msg": f"✓ {res['n_cookies']} cookies guardadas (formato {res['format']}).",
+            }
+        else:
+            request.session["flash"] = {
+                "type": "error",
+                "msg": f"No pude guardar cookies: {res['error']}",
+            }
+    except Exception as e:
+        import traceback as _tb
+        _tb.print_exc()
+        request.session["flash"] = {
+            "type": "error",
+            "msg": f"Error: {type(e).__name__}: {str(e)[:200]}",
+        }
+    return RedirectResponse("/precios-historial", status_code=303)
+
+
 @app.post("/precios-historial/scrape-ml")
 def precios_historial_scrape_ml(
     request: Request,
@@ -572,6 +604,13 @@ def precios_historial_view(
     except Exception as e:
         print(f"[/precios-historial] total_log_sistema error: {e}")
 
+    # Estado de cookies ML
+    cookies_info: dict = {"configured": False}
+    try:
+        cookies_info = ml_seller_session.cookies_status(db)
+    except Exception as e:
+        print(f"[/precios-historial] cookies_status error: {e}")
+
     # Histórico real de ML (scraped del seller hub) — esta es LA fuente.
     ml_history_rows: list = []
     total_ml_history = 0
@@ -613,6 +652,7 @@ def precios_historial_view(
                 "historial": historial,
                 "ml_history_rows": ml_history_rows,
                 "total_ml_history": total_ml_history,
+                "cookies_info": cookies_info,
                 "ultimo_snapshot": ultimo_snap,
                 "total_snaps": total_snaps,
                 "items_trackeados": items_trackeados,

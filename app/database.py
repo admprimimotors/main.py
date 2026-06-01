@@ -323,6 +323,17 @@ def _apply_migrations() -> None:
         "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_tipo ON ml_item_history(tipo_modificacion)",
         "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_desde ON ml_item_history(realizada_desde)",
         "CREATE INDEX IF NOT EXISTS ix_mlitemhistory_item_fecha ON ml_item_history(ml_item_id, fecha_evento)",
+        # v19b (2026-06-01): tabla ml_seller_cookies — singleton para cookies
+        # de sesión web pegadas manualmente por el user (no usamos playwright).
+        """
+        CREATE TABLE IF NOT EXISTS ml_seller_cookies (
+            id SERIAL PRIMARY KEY,
+            cookies_json JSONB,
+            cookies_raw TEXT,
+            updated_by VARCHAR(80),
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+        """,
     ]
     try:
         with engine.begin() as conn:
