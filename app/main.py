@@ -49,7 +49,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.54.0"
+APP_VERSION = "0.55.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -83,6 +83,31 @@ app.add_middleware(
     same_site="lax",
     https_only=True,              # Render sirve sobre HTTPS
 )
+
+
+# ===============================================================
+# Auto-sync de publicaciones (APScheduler) — arranca/para con la app.
+# Refresca el snapshot ML→DB cada N min para que el panel no quede
+# desfasado (antes solo se sincronizaba a mano). Read-only sobre ML.
+# Ver app/scheduler_jobs.py.
+# ===============================================================
+@app.on_event("startup")
+def _startup_pubs_scheduler() -> None:
+    try:
+        from . import scheduler_jobs
+        scheduler_jobs.start()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
+
+@app.on_event("shutdown")
+def _shutdown_pubs_scheduler() -> None:
+    try:
+        from . import scheduler_jobs
+        scheduler_jobs.shutdown()
+    except Exception:
+        pass
 
 
 # ===============================================================
