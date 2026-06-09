@@ -498,6 +498,87 @@ def add_item_compatibilities(
     return _post(db, f"/items/{item_id}/compatibilities", payload)
 
 
+# =============================================================
+# Diagnóstico: visitas, preguntas, health, reputación del seller
+# =============================================================
+
+def get_item_visits(db: Session, item_id: str, *, last_days: int = 30) -> dict:
+    """
+    GET /items/{id}/visits/time_window — visitas en los últimos N días.
+    Devuelve {total_visits, results:[{date, total}]} o {} si falla.
+    """
+    if not item_id:
+        return {}
+    try:
+        return _get(
+            db,
+            f"/items/{item_id}/visits/time_window",
+            params={"last": int(last_days), "unit": "day"},
+        ) or {}
+    except MLClientError:
+        return {}
+
+
+def get_item_health(db: Session, item_id: str) -> dict:
+    """
+    GET /items/{id}/health — score de calidad de la publicación y campos faltantes.
+    Útil para ranking del algoritmo: items con `health < 0.7` están penalizados.
+    """
+    if not item_id:
+        return {}
+    try:
+        return _get(db, f"/items/{item_id}/health") or {}
+    except MLClientError:
+        return {}
+
+
+def get_questions_unanswered(db: Session, seller_id, *, limit: int = 50) -> dict:
+    """
+    GET /my/received_questions/search?status=UNANSWERED → preguntas sin responder.
+    Las preguntas viejas hunden el ranking de la publicación.
+    """
+    try:
+        return _get(
+            db,
+            "/my/received_questions/search",
+            params={"status": "UNANSWERED", "limit": int(limit), "api_version": 4},
+        ) or {}
+    except MLClientError:
+        return {}
+
+
+def get_seller_reputation(db: Session) -> dict:
+    """
+    Trae info completa del seller (incluye seller_reputation con level_id,
+    power_seller_status, transactions cancelled/claims, etc.).
+    """
+    try:
+        return _get(db, "/users/me") or {}
+    except MLClientError:
+        return {}
+
+
+def search_user_items_ids(
+    db: Session,
+    seller_id,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+) -> dict:
+    """
+    GET /users/{user_id}/items/search — lista IDs de items del seller.
+    Para iterar el catálogo entero hay que paginar (max 1000 por scroll).
+    """
+    params = {"limit": int(limit), "offset": int(offset)}
+    if status:
+        params["status"] = status
+    try:
+        return _get(db, f"/users/{seller_id}/items/search", params=params) or {}
+    except MLClientError:
+        return {}
+
+
 def get_item_compatibilities(db: Session, item_id: str) -> list:
     """
     GET /items/{id}/compatibilities → lista de compatibilidades vehiculares.

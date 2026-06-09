@@ -33,6 +33,7 @@ from . import (
     clientes,
     database,
     ml_client,
+    ml_diagnostico,
     ml_orders,
     ml_price_tracker,
     ml_publisher,
@@ -48,7 +49,7 @@ from . import (
 from .database import get_db
 
 APP_NAME = "Primi Motors — Backend"
-APP_VERSION = "0.53.1"
+APP_VERSION = "0.54.0"
 
 # Raíz del paquete app/
 BASE_DIR = Path(__file__).resolve().parent
@@ -505,6 +506,41 @@ def precios_historial_scrape_ml(
             "msg": f"Scrape falló: {type(e).__name__}: {str(e)[:200]}",
         }
     return RedirectResponse("/precios-historial", status_code=303)
+
+
+@app.get("/diagnostico-ml", response_class=HTMLResponse)
+def diagnostico_ml_view(
+    request: Request,
+    sample_visitas: int = 30,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Diagnóstico del seller en ML — por qué bajaron las ventas y dónde están
+    las oportunidades. Combina queries locales rápidas con un puñado de
+    llamadas a la API para visitas, preguntas y reputación.
+    """
+    try:
+        diag = ml_diagnostico.generar_diagnostico(db, sample_visitas=sample_visitas)
+    except Exception as e:
+        import traceback as _tb
+        _tb.print_exc()
+        diag = {"errors": [f"fatal: {type(e).__name__}: {e}"]}
+
+    try:
+        return templates.TemplateResponse(
+            request,
+            "diagnostico_ml.html",
+            {"user": user, "diag": diag, "sample_visitas": sample_visitas},
+        )
+    except Exception as e:
+        import traceback as _tb
+        tb = _tb.format_exc()
+        return HTMLResponse(
+            f"<h1>Diagnóstico — error de render</h1><pre>{tb}</pre>"
+            f"<h2>Datos crudos</h2><pre>{diag}</pre>",
+            status_code=200,
+        )
 
 
 @app.get("/precios-historial", response_class=HTMLResponse)
