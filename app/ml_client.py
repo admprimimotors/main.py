@@ -184,19 +184,15 @@ def get_access_token(db: Session) -> str:
 # =============================================================
 
 def _get(db: Session, path: str, params: Optional[dict] = None) -> dict:
-    """GET autenticado. Maneja 401 con un retry tras forzar refresh del token."""
-    token = get_access_token(db)
+    """
+    GET autenticado. Reintenta 401 (refresh de token) y 429 (rate limit, con
+    backoff usando Retry-After o exponencial). ML corta a ~100 req/min por app,
+    así que sin esto las operaciones masivas fallan de a montones.
+    """
+    import time
     url = f"{ML_API_BASE}{path}"
-    headers = {"Authorization": f"Bearer {token}"}
-
-    try:
-        response = requests.get(url, headers=headers, params=params or {}, timeout=20)
-    except requests.RequestException as e:
-        raise MLClientError(f"Error de red en GET {path}: {e}") from e
-
-    if response.status_code == 401:
-        # Token expirado/revocado mid-request: forzar refresh y reintentar una vez.
-        _access_token_cache["expires_at"] = 0
+    response = None
+    for intento in range(4):
         token = get_access_token(db)
         try:
             response = requests.get(
@@ -206,7 +202,17 @@ def _get(db: Session, path: str, params: Optional[dict] = None) -> dict:
                 timeout=20,
             )
         except requests.RequestException as e:
-            raise MLClientError(f"Error de red en GET {path} (retry): {e}") from e
+            raise MLClientError(f"Error de red en GET {path}: {e}") from e
+
+        if response.status_code == 401 and intento < 3:
+            # Token expirado/revocado mid-request: forzar refresh y reintentar.
+            _access_token_cache["expires_at"] = 0
+            continue
+        if response.status_code == 429 and intento < 3:
+            espera = int(response.headers.get("Retry-After") or (2 ** intento))
+            time.sleep(min(max(espera, 1), 30))
+            continue
+        break
 
     if response.status_code == 404:
         raise MLClientError(f"ML 404: el item/recurso '{path}' no existe en ML")
@@ -305,30 +311,28 @@ def _put(db: Session, path: str, payload: dict) -> dict:
     NO chequea is_write_enabled aquí — eso es responsabilidad del caller
     (las funciones públicas update_item_*).
     """
-    token = get_access_token(db)
+    import time
     url = f"{ML_API_BASE}{path}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.put(url, headers=headers, json=payload, timeout=20)
-    except requests.RequestException as e:
-        raise MLClientError(f"Error de red en PUT {path}: {e}") from e
-
-    if response.status_code == 401:
-        _access_token_cache["expires_at"] = 0
+    response = None
+    for intento in range(4):
         token = get_access_token(db)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
         try:
-            response = requests.put(
-                url,
-                headers={**headers, "Authorization": f"Bearer {token}"},
-                json=payload,
-                timeout=20,
-            )
+            response = requests.put(url, headers=headers, json=payload, timeout=20)
         except requests.RequestException as e:
-            raise MLClientError(f"Error de red en PUT {path} (retry): {e}") from e
+            raise MLClientError(f"Error de red en PUT {path}: {e}") from e
+
+        if response.status_code == 401 and intento < 3:
+            _access_token_cache["expires_at"] = 0
+            continue
+        if response.status_code == 429 and intento < 3:
+            espera = int(response.headers.get("Retry-After") or (2 ** intento))
+            time.sleep(min(max(espera, 1), 30))
+            continue
+        break
 
     if not response.ok:
         # ML suele devolver JSON con `message` y `cause` describiendo el problema.
