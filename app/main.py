@@ -3013,6 +3013,35 @@ def publicaciones_push_sku_loop(
     return JSONResponse(result)
 
 
+@app.post("/publicaciones/adopt-orphans/loop")
+def publicaciones_adopt_orphans_loop(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Detecta y adopta publicaciones huérfanas (en ML pero no en el sistema).
+    El frontend llama en loop hasta `done=true`. Crea Producto + publicación
+    local espejando ML (mismo stock/precio). Read-only sobre ML.
+    """
+    ADOPT_CAP = 30  # por request — seguro para el timeout de Render
+    try:
+        result = catalogo.adopt_orphans(db, limit=ADOPT_CAP)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return JSONResponse(
+            {"adopted": 0, "remaining": 0, "done": True,
+             "errors": [f"{type(e).__name__}: {e}"], "skus_done": []},
+            status_code=500,
+        )
+    return JSONResponse(result)
+
+
 @app.post("/publicaciones/bulk/pausar")
 async def publicaciones_bulk_pausar(
     request: Request,

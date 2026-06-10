@@ -1687,6 +1687,132 @@ def bulk_push_seller_sku(db: Session, offset: int = 0, limit: int = 25) -> dict:
     }
 
 
+def adopt_orphans(db: Session, limit: int = 30) -> dict:
+    """
+    Detecta publicaciones que existen en ML pero NO están vinculadas al sistema
+    (huérfanas) y las ADOPTA: crea el Producto local + la fila
+    producto_publicaciones_ml, poblados desde los datos de ML (GET /items).
+
+    El producto local se crea ESPEJANDO el estado de ML (mismo stock y precio
+    que ML) para NO generar drift ni riesgo de push. Read-only sobre ML.
+
+    SKU: usa el seller_custom_field de ML si existe y está libre; si no, usa el
+    ml_item_id como SKU placeholder (único y trazable; el usuario lo refina luego).
+
+    El frontend llama en loop hasta done=true (cada corrida recalcula las
+    huérfanas, así las ya adoptadas salen de la lista). Idempotente.
+
+    Devuelve {"adopted", "remaining", "done", "errors", "skus_done"}.
+    """
+    from . import ml_client
+    from . import publicaciones_ml as _ppml
+    from .models import ProductoPublicacionML as _PPML
+
+    if not ml_client.is_configured():
+        return {"adopted": 0, "remaining": 0, "done": True,
+                "errors": ["ML no configurado"], "skus_done": []}
+
+    ml_ids = set(ml_client.list_all_item_ids(db))
+    if not ml_ids:
+        return {"adopted": 0, "remaining": 0, "done": True,
+                "errors": ["No se pudieron listar items de ML"], "skus_done": []}
+
+    local_prod = {x for (x,) in db.execute(
+        select(Producto.ml_item_id).where(Producto.ml_item_id.is_not(None))
+    ).all()}
+    local_pub = {x for (x,) in db.execute(select(_PPML.ml_item_id)).all()}
+    orphans = sorted(ml_ids - local_prod - local_pub)
+
+    if not orphans:
+        return {"adopted": 0, "remaining": 0, "done": True, "errors": [], "skus_done": []}
+
+    batch = orphans[:limit]
+    adopted = 0
+    errors: list[str] = []
+    skus_done: list[str] = []
+    for item_id in batch:
+        try:
+            item = ml_client.get_item(db, item_id)
+        except Exception as e:
+            errors.append(f"{item_id}: GET {type(e).__name__}")
+            continue
+        raw_sku = (item.get("seller_custom_field") or "").strip()
+        sku = raw_sku or item_id
+        if db.execute(select(Producto.id).where(Producto.sku == sku)).scalar():
+            sku = item_id  # fallback al id (único)
+            if db.execute(select(Producto.id).where(Producto.sku == sku)).scalar():
+                errors.append(f"{item_id}: sku duplicado, skip")
+                continue
+        titulo = (item.get("title") or item_id)[:500]
+        precio = None
+        try:
+            if item.get("price") is not None:
+                precio = Decimal(str(item["price"]))
+        except Exception:
+            precio = None
+        try:
+            stock = int(item.get("available_quantity") or 0)
+        except Exception:
+            stock = 0
+        shipping = item.get("shipping") or {}
+        prod = Producto(
+            sku=sku,
+            sku_ml=(raw_sku or None),
+            titulo=titulo,
+            ficha_tecnica={},
+            ml_item_id=item_id,
+            ml_permalink=item.get("permalink"),
+            ml_status=item.get("status"),
+            ml_category_id=item.get("category_id"),
+            ml_stock=stock,
+            ml_precio=precio,
+            ml_last_synced_at=datetime.now(timezone.utc),
+            precio_final=precio,
+            stock_actual=stock,          # espeja ML → sin drift
+            activo=True,
+        )
+        db.add(prod)
+        try:
+            db.flush()  # popula prod.id
+        except Exception as e:
+            db.rollback()
+            errors.append(f"{item_id}: flush {type(e).__name__}: {str(e)[:80]}")
+            continue
+        _ppml.create_publicacion(
+            db,
+            producto_id=prod.id,
+            ml_item_id=item_id,
+            ml_permalink=item.get("permalink"),
+            ml_status=item.get("status"),
+            ml_category_id=item.get("category_id"),
+            ml_listing_type=item.get("listing_type_id"),
+            ml_shipping_mode=shipping.get("mode"),
+            ml_catalog_listing=bool(item.get("catalog_listing")),
+            ml_titulo=titulo,
+            ml_precio=precio,
+            ml_stock_snapshot=stock,
+            commit=False,
+        )
+        adopted += 1
+        skus_done.append(sku)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        return {"adopted": 0, "remaining": len(orphans), "done": False,
+                "errors": [f"commit {type(e).__name__}: {str(e)[:120]}"], "skus_done": []}
+
+    remaining = len(orphans) - len(batch)
+    return {
+        "adopted": adopted,
+        "remaining": max(remaining, 0),
+        "done": remaining <= 0,
+        "errors": errors,
+        "skus_done": skus_done,
+    }
+
+
 def update_ficha_tecnica(
     db: Session,
     sku: str,

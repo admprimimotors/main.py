@@ -155,6 +155,15 @@
   <span id="push-sku-status" style="color: var(--muted); font-size: 12px; margin-left: 10px;"></span>
 </div>
 
+<!-- Adoptar publicaciones huérfanas (en ML pero no en el sistema) -->
+<div style="margin: 8px 0 16px 0;">
+  <button type="button" id="btn-adopt-orphans" class="btn btn-ghost"
+          style="background:#2a1a3a; border-color:#a855f7; color:#c4b5fd;">
+    🧲 Detectar y vincular huérfanas (en ML, fuera del sistema)
+  </button>
+  <span id="adopt-orphans-status" style="color: var(--muted); font-size: 12px; margin-left: 10px;"></span>
+</div>
+
 <!-- Resync local snapshot (sin tocar ML) -->
 {% if stats.drift and stats.drift > 0 %}
 <form method="post" action="/publicaciones/resync-snapshots"
@@ -370,5 +379,34 @@ async function pushSkuLoop() {
 }
 var _btnSku = document.getElementById('btn-push-sku');
 if (_btnSku) _btnSku.addEventListener('click', pushSkuLoop);
+
+// --- Detectar y vincular publicaciones huérfanas (loop hasta done) ---
+async function adoptOrphansLoop() {
+  const btn = document.getElementById('btn-adopt-orphans');
+  const st = document.getElementById('adopt-orphans-status');
+  if (!btn || btn.disabled) return;
+  if (!confirm('Voy a detectar las publicaciones que están en ML pero no en tu sistema, y crearlas localmente espejando ML (mismo stock y precio). No toca nada en ML. ¿Continuar?')) return;
+  btn.disabled = true;
+  let adopted = 0, errs = 0, guard = 0;
+  st.textContent = 'Detectando huérfanas…';
+  try {
+    while (true) {
+      guard++;
+      const r = await fetch('/publicaciones/adopt-orphans/loop', { method: 'POST' });
+      const d = await r.json();
+      adopted += d.adopted || 0;
+      errs += (d.errors ? d.errors.length : 0);
+      st.textContent = `Adoptadas: ${adopted} · faltan ~${d.remaining}` + (errs ? ` · errores: ${errs}` : '');
+      if (d.done || guard > 200) break;
+    }
+    st.textContent += ' · ✓ listo (recargá para verlas)';
+  } catch (e) {
+    st.textContent += ' · ✗ error: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+var _btnAdopt = document.getElementById('btn-adopt-orphans');
+if (_btnAdopt) _btnAdopt.addEventListener('click', adoptOrphansLoop);
 </script>
 {% endblock %}

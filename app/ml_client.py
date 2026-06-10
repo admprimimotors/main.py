@@ -431,6 +431,31 @@ def update_item_seller_sku(db: Session, item_id: str, sku: str) -> dict:
     return _put(db, f"/items/{item_id}", {"seller_custom_field": str(sku).strip()[:64]})
 
 
+def list_all_item_ids(db: Session) -> list:
+    """
+    Lista TODOS los item_ids del seller en ML (scan paginado). Read-only.
+    Se usa para detectar publicaciones huérfanas (en ML pero no en la base local).
+    """
+    uid = get_user_id(db)
+    if not uid:
+        return []
+    ids: list = []
+    scroll = None
+    while True:
+        params = {"search_type": "scan", "limit": 100}
+        if scroll:
+            params["scroll_id"] = scroll
+        r = _get(db, f"/users/{uid}/items/search", params) or {}
+        batch = r.get("results") or []
+        if not batch:
+            break
+        ids.extend(batch)
+        scroll = r.get("scroll_id")
+        if not scroll:
+            break
+    return ids
+
+
 # =============================================================
 # Compatibilidades (vehículos compatibles)
 # =============================================================
