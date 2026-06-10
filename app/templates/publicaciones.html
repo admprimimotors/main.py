@@ -145,6 +145,16 @@
   {% endif %}
 </form>
 
+<!-- Backfill de SKU a ML (P1 auditoría — empuja seller_custom_field) -->
+<div style="margin: 8px 0 16px 0;">
+  <button type="button" id="btn-push-sku" class="btn btn-ghost"
+          style="background:#1a2a3a; border-color:#3b82f6; color:#93c5fd;"
+          {% if not ml_write_enabled %}disabled title="Escritura a ML deshabilitada"{% endif %}>
+    🏷️ Pushar SKU a ML (todas las vinculadas)
+  </button>
+  <span id="push-sku-status" style="color: var(--muted); font-size: 12px; margin-left: 10px;"></span>
+</div>
+
 <!-- Resync local snapshot (sin tocar ML) -->
 {% if stats.drift and stats.drift > 0 %}
 <form method="post" action="/publicaciones/resync-snapshots"
@@ -328,5 +338,37 @@ document.addEventListener('change', e => {
     updateCount();
   }
 });
+
+// --- Backfill de SKU a ML (loop por offset hasta done) ---
+async function pushSkuLoop() {
+  const btn = document.getElementById('btn-push-sku');
+  const st = document.getElementById('push-sku-status');
+  if (!btn || btn.disabled) return;
+  if (!confirm('Voy a pushar el SKU de tu catálogo a TODAS las publicaciones vinculadas en ML. Solo toca el campo SKU (no precio ni stock). ¿Continuar?')) return;
+  btn.disabled = true;
+  let offset = 0, pushed = 0, skipped = 0, errs = 0, total = null;
+  st.textContent = 'Iniciando…';
+  try {
+    while (true) {
+      const r = await fetch('/publicaciones/bulk/push-sku/loop?offset=' + offset, { method: 'POST' });
+      const d = await r.json();
+      if (total === null) total = d.total || 0;
+      pushed += d.pushed || 0;
+      skipped += d.skipped || 0;
+      errs += (d.errors ? d.errors.length : 0);
+      offset = d.next_offset || (offset + 25);
+      const seen = Math.min(offset, total || offset);
+      st.textContent = `Procesadas ${seen}/${total} · SKU enviados: ${pushed} · sin SKU local: ${skipped}` + (errs ? ` · errores: ${errs}` : '');
+      if (d.done) break;
+    }
+    st.textContent += ' · ✓ listo';
+  } catch (e) {
+    st.textContent += ' · ✗ error: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+var _btnSku = document.getElementById('btn-push-sku');
+if (_btnSku) _btnSku.addEventListener('click', pushSkuLoop);
 </script>
 {% endblock %}

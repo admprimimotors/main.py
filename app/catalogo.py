@@ -1628,6 +1628,65 @@ def bulk_sync_oldest(db: Session, limit: int = 50) -> tuple[int, int, list[str]]
     return ok, len(skus), errors
 
 
+def bulk_push_seller_sku(db: Session, offset: int = 0, limit: int = 25) -> dict:
+    """
+    Backfill de SKU a ML: empuja `seller_custom_field` (= sku_ml o sku del
+    catálogo local) a las publicaciones vinculadas (ml_item_id no nulo),
+    recorriendo el catálogo por `offset`/`limit`.
+
+    Solo toca metadata (SKU) — NO precio ni stock. Idempotente: re-pushar el
+    mismo SKU no rompe nada. El frontend llama en loop con offset creciente.
+
+    Devuelve dict:
+      {"pushed", "skipped", "next_offset", "total", "done", "errors"}
+    """
+    from . import ml_client
+
+    if not ml_client.is_configured() or not ml_client.is_write_enabled():
+        return {
+            "pushed": 0, "skipped": 0, "next_offset": offset, "total": 0,
+            "done": True,
+            "errors": ["ML no configurado o escritura deshabilitada (ML_WRITE_ENABLED)"],
+        }
+
+    total = db.execute(
+        select(sql_func.count(Producto.id)).where(Producto.ml_item_id.is_not(None))
+    ).scalar() or 0
+
+    rows = db.execute(
+        select(Producto.ml_item_id, Producto.sku, Producto.sku_ml)
+        .where(Producto.ml_item_id.is_not(None))
+        .order_by(Producto.id)
+        .offset(offset)
+        .limit(limit)
+    ).all()
+
+    pushed = 0
+    skipped = 0
+    errors: list[str] = []
+    for ml_item_id, sku, sku_ml in rows:
+        sku_push = (sku_ml or sku or "").strip()
+        if not sku_push:
+            skipped += 1
+            continue
+        try:
+            ml_client.update_item_seller_sku(db, ml_item_id, sku_push)
+            pushed += 1
+        except Exception as e:
+            errors.append(f"{ml_item_id}: {type(e).__name__}: {str(e)[:120]}")
+
+    next_offset = offset + len(rows)
+    done = (len(rows) == 0) or (next_offset >= total)
+    return {
+        "pushed": pushed,
+        "skipped": skipped,
+        "next_offset": next_offset,
+        "total": total,
+        "done": done,
+        "errors": errors,
+    }
+
+
 def update_ficha_tecnica(
     db: Session,
     sku: str,

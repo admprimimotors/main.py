@@ -2981,6 +2981,38 @@ def publicaciones_resync_snapshots(
     return RedirectResponse("/publicaciones", status_code=303)
 
 
+@app.post("/publicaciones/bulk/push-sku/loop")
+def publicaciones_push_sku_loop(
+    request: Request,
+    offset: int = 0,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """
+    Backfill de SKU (seller_custom_field) hacia ML. El frontend llama en loop
+    con `offset` creciente hasta `done=true`. Empuja el SKU del catálogo local
+    a cada publicación vinculada. Solo metadata — NO toca precio ni stock.
+    """
+    PUSH_SKU_CAP = 25  # por request — seguro para el timeout de Render
+    try:
+        result = catalogo.bulk_push_seller_sku(db, offset=offset, limit=PUSH_SKU_CAP)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return JSONResponse(
+            {
+                "pushed": 0, "skipped": 0, "next_offset": offset, "total": 0,
+                "done": True, "errors": [f"{type(e).__name__}: {e}"],
+            },
+            status_code=500,
+        )
+    return JSONResponse(result)
+
+
 @app.post("/publicaciones/bulk/pausar")
 async def publicaciones_bulk_pausar(
     request: Request,

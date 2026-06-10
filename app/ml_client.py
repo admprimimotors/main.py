@@ -420,6 +420,17 @@ def update_item_title(db: Session, item_id: str, title: str) -> dict:
     return _put(db, f"/items/{item_id}", {"title": (title or "").strip()[:60]})
 
 
+def update_item_seller_sku(db: Session, item_id: str, sku: str) -> dict:
+    """
+    PUT /items/{id} con `seller_custom_field` = SKU del vendedor.
+
+    Es el campo "SKU" de la publicación en ML (privado del vendedor). Mejora el
+    matcheo con el catálogo y la organización interna. Solo metadata — NO toca
+    precio ni stock. Aceptado universalmente (incluso en publicaciones de catálogo).
+    """
+    return _put(db, f"/items/{item_id}", {"seller_custom_field": str(sku).strip()[:64]})
+
+
 # =============================================================
 # Compatibilidades (vehículos compatibles)
 # =============================================================
