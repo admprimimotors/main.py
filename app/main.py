@@ -4659,27 +4659,4 @@ def buscar_categoria_page(
     )
 
 
-# ===============================================================
-# TEMPORAL — endpoint para extraer el access_token vigente.
-# Solo lo dejamos hasta terminar el push manual de compats de bujías.
-# DESPUÉS BORRAR — no debería quedar en producción.
-# ===============================================================
-
-@app.get("/admin/ml-token-temporal")
-def admin_ml_token_temporal(
-    user: str = Depends(auth.require_user),
-    db: DbSession = Depends(get_db),
-):
-    """Devuelve el access_token de ML vigente para uso manual desde fuera del sistema."""
-    try:
-        token = ml_client.get_access_token(db)
-        return JSONResponse({
-            "ok": True,
-            "access_token": token,
-            "warning": "TEMPORAL — borrar este endpoint cuando termine el push manual de compats.",
-        })
-    except Exception as e:
-        return JSONResponse(
-            {"ok": False, "error": f"{type(e).__name__}: {e}"},
-            status_code=500,
-        )
+# (endpoint temporal /admin/ml-token-temporal eliminado por seguridad — 2026-06-09)
