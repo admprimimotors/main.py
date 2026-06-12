@@ -606,7 +606,7 @@ def get_ml_fees_config() -> dict:
     """
     return {
         "comision_pct": _env_decimal("ML_COMISION_PCT", Decimal("14")),
-        "cuotas_pct":   _env_decimal("ML_CUOTAS_PCT",   Decimal("5")),
+        "cuotas_pct":   _env_decimal("ML_CUOTAS_PCT",   Decimal("13")),
         "impuestos_pct_default": _env_decimal("ML_IMPUESTOS_PCT_DEFAULT", Decimal("3")),
         "envio_default": _env_decimal("ML_ENVIO_DEFAULT", Decimal("0")),
         "margen_objetivo_pct": _env_decimal("ML_MARGEN_OBJETIVO_PCT", Decimal("30")),
@@ -667,6 +667,7 @@ def analyze_rentabilidad_ml(
     envio_fijo_producto: Optional[Decimal] = None,
     impuestos_pct_producto: Optional[Decimal] = None,
     comision_pct_producto: Optional[Decimal] = None,
+    cuotas_pct_producto: Optional[Decimal] = None,
 ) -> RentabilidadML:
     """
     Calcula precio ideal + margen neto real para un producto.
@@ -686,7 +687,13 @@ def analyze_rentabilidad_ml(
         if comision_pct_producto is not None
         else cfg["comision_pct"]
     )
-    fees_pct_total = comision_pct + cfg["cuotas_pct"] + impuestos_pct
+    # Cuotas: costo real del producto (del simulador ML) > default global (fallback)
+    cuotas_pct = (
+        cuotas_pct_producto
+        if cuotas_pct_producto is not None
+        else cfg["cuotas_pct"]
+    )
+    fees_pct_total = comision_pct + cuotas_pct + impuestos_pct
 
     result = RentabilidadML(
         precio_costo=precio_costo,
@@ -694,7 +701,7 @@ def analyze_rentabilidad_ml(
         envio_fijo=envio,
         impuestos_pct=impuestos_pct,
         comision_pct=comision_pct,
-        cuotas_pct=cfg["cuotas_pct"],
+        cuotas_pct=cuotas_pct,
         margen_objetivo_pct=cfg["margen_objetivo_pct"],
         fees_pct_total=fees_pct_total,
     )
@@ -718,7 +725,7 @@ def analyze_rentabilidad_ml(
         result.fee_comision = (precio_final * comision_pct / Decimal("100")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
-        result.fee_cuotas = (precio_final * cfg["cuotas_pct"] / Decimal("100")).quantize(
+        result.fee_cuotas = (precio_final * cuotas_pct / Decimal("100")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
         result.fee_impuestos = (precio_final * impuestos_pct / Decimal("100")).quantize(

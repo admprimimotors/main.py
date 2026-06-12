@@ -920,6 +920,7 @@ def catalogo_detail(
         envio_fijo_producto=detail.get("ml_envio_fijo"),
         impuestos_pct_producto=detail.get("ml_impuestos_pct"),
         comision_pct_producto=detail.get("ml_comision_pct"),
+        cuotas_pct_producto=detail.get("ml_cuotas_pct"),
     )
     back_url = request.session.get("last_catalogo_url") or "/catalogo"
     return templates.TemplateResponse(
@@ -4660,3 +4661,23 @@ def buscar_categoria_page(
 
 
 # (endpoint temporal /admin/ml-token-temporal eliminado por seguridad — 2026-06-09)
+
+
+@app.get("/ventas-margen", response_class=HTMLResponse)
+def ventas_margen_page(
+    request: Request,
+    user: str = Depends(auth.require_user),
+    db: DbSession = Depends(get_db),
+):
+    """Ventas con MARGEN REAL — usa los fees reales capturados de cada orden ML."""
+    ventas = ml_orders.ventas_con_margen(db, limit=200)
+    return templates.TemplateResponse(
+        request,
+        "ventas_margen.html",
+        {
+            "user": user,
+            "active": "ventas_margen",
+            "version": APP_VERSION,
+            "ventas": ventas,
+        },
+    )

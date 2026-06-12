@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Margen real por venta · Primi Motors{% endblock %}
+{% block page_title %}Margen real por venta{% endblock %}
+{% block content %}
+<style>
+  .vm-note { color: var(--muted); font-size: 12px; margin-bottom: 14px; line-height: 1.5; }
+  .vm-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .vm-card { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 12px 14px; }
+  .vm-card .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .vm-card .n { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .vm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .vm-table th, .vm-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.08); text-align: right; white-space: nowrap; }
+  .vm-table th { color: var(--muted); font-weight: 600; }
+  .vm-table td.l, .vm-table th.l { text-align: left; }
+  .pos { color: #86efac; } .neg { color: #fca5a5; }
+  .muted { color: var(--muted); font-size: 11px; }
+</style>
+
+<p class="vm-note">
+  Margen calculado con los <strong>fees REALES</strong> de cada orden de Mercado Libre
+  (comisión + cuotas + envío exactos, no estimados).
+  <strong>Neto = precio de venta − cargo de ML − envío.</strong>
+  <strong>Margen = neto − costo.</strong>
+</p>
+
+{% set ns = namespace(total=0, neto=0, margen=0, n=0) %}
+{% for v in ventas if v.tiene_fees %}
+  {% set ns.total = ns.total + (v.total|float) %}
+  {% set ns.neto = ns.neto + (v.neto|float) %}
+  {% set ns.margen = ns.margen + (v.margen|float if v.margen is not none else 0) %}
+  {% set ns.n = ns.n + 1 %}
+{% endfor %}
+
+<div class="vm-cards">
+  <div class="vm-card"><div class="lbl">Ventas (con fees)</div><div class="n">{{ ns.n }}</div></div>
+  <div class="vm-card"><div class="lbl">Facturado</div><div class="n">${{ "{:,.0f}".format(ns.total) }}</div></div>
+  <div class="vm-card"><div class="lbl">Neto recibido</div><div class="n">${{ "{:,.0f}".format(ns.neto) }}</div></div>
+  <div class="vm-card"><div class="lbl">Margen real total</div><div class="n {{ 'pos' if ns.margen >= 0 else 'neg' }}">${{ "{:,.0f}".format(ns.margen) }}</div></div>
+</div>
+
+<table class="vm-table">
+  <thead>
+    <tr>
+      <th class="l">Fecha</th>
+      <th class="l">Producto</th>
+      <th>Venta</th>
+      <th>Comis.+cuotas</th>
+      <th>Envío</th>
+      <th>Neto</th>
+      <th>Costo</th>
+      <th>Margen $</th>
+      <th>Margen %</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for v in ventas %}
+    <tr>
+      <td class="l muted">{{ v.fecha.strftime('%d/%m/%y') if v.fecha else '' }}</td>
+      <td class="l">{{ v.titulo or v.sku or '—' }}
+        <div class="muted">{{ v.sku or '' }}{% if v.cantidad and v.cantidad > 1 %} · x{{ v.cantidad }}{% endif %}</div>
+      </td>
+      {% if v.tiene_fees %}
+        <td>${{ "{:,.0f}".format(v.total|float) }}</td>
+        <td class="neg">−${{ "{:,.0f}".format(v.sale_fee|float) }}</td>
+        <td class="neg">−${{ "{:,.0f}".format(v.envio|float) }}</td>
+        <td>${{ "{:,.0f}".format(v.neto|float) }}</td>
+        <td>{% if v.costo is not none %}${{ "{:,.0f}".format(v.costo|float) }}{% else %}<span class="muted">s/costo</span>{% endif %}</td>
+        <td class="{{ 'pos' if (v.margen is not none and v.margen|float >= 0) else 'neg' }}">{% if v.margen is not none %}${{ "{:,.0f}".format(v.margen|float) }}{% else %}—{% endif %}</td>
+        <td class="{{ 'pos' if (v.margen_pct is not none and v.margen_pct >= 0) else 'neg' }}">{% if v.margen_pct is not none %}{{ "%.0f"|format(v.margen_pct) }}%{% else %}—{% endif %}</td>
+      {% else %}
+        <td>${{ "{:,.0f}".format(v.total|float) }}</td>
+        <td colspan="6" class="l muted">Fees pendientes — se completan en el próximo sync de ventas.</td>
+      {% endif %}
+    </tr>
+  {% else %}
+    <tr><td colspan="9" class="l muted">No hay ventas pagadas registradas todavía.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

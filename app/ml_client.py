@@ -244,6 +244,14 @@ def get_user_info(db: Session) -> dict:
     return _get(db, "/users/me")
 
 
+def get_shipment_costs(db: Session, shipment_id: str) -> dict:
+    """
+    GET /shipments/{id}/costs → costo real del envío. El costo que paga el
+    VENDEDOR está en senders[0].cost. Read-only. Se usa para el margen real.
+    """
+    return _get(db, f"/shipments/{shipment_id}/costs")
+
+
 # Cache de categorías (clave = category_id ML, valor = dict con name, etc.)
 # El proceso es de un solo worker, así que un dict en memoria sirve y vacía
 # en cada redeploy (cosa OK, las categorías de ML no cambian seguido).

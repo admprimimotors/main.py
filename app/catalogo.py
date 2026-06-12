@@ -878,7 +878,7 @@ def list_productos(
              + sql_func.coalesce(Producto.ml_envio_fijo, envio_default))
             / (Decimal("1") - (
                 sql_func.coalesce(Producto.ml_comision_pct, com_default)
-                + cuotas_pct
+                + sql_func.coalesce(Producto.ml_cuotas_pct, cuotas_pct)
                 + sql_func.coalesce(Producto.ml_impuestos_pct, imp_default)
             ) / Decimal("100"))
         )
@@ -931,6 +931,7 @@ def list_productos(
                 envio_fijo_producto=prod.ml_envio_fijo,
                 impuestos_pct_producto=prod.ml_impuestos_pct,
                 comision_pct_producto=prod.ml_comision_pct,
+                cuotas_pct_producto=prod.ml_cuotas_pct,
             )
             if r.precio_ideal is not None:
                 below_ideal = bool(prod.precio_final < r.precio_ideal)
@@ -1021,6 +1022,7 @@ def get_producto_detail(db: Session, sku: str) -> Optional[dict]:
         "ml_envio_fijo": prod.ml_envio_fijo,
         "ml_impuestos_pct": prod.ml_impuestos_pct,
         "ml_comision_pct": prod.ml_comision_pct,
+        "ml_cuotas_pct": prod.ml_cuotas_pct,
         "created_at": prod.created_at,
         "updated_at": prod.updated_at,
         "compatibilidades": compats,
@@ -2705,6 +2707,42 @@ def sync_producto_from_ml(
         # No rompemos el sync del producto si la propagación falla.
         print(f"[sync_producto_from_ml] propagación a PPML falló: {type(e).__name__}: {e}")
 
+    # ---- Fee REAL del simulador de ML (SIEMPRE, no solo en hidratar) ----
+    # /sites/MLA/listing_prices con price + categoría + listing_type del item
+    # devuelve sale_fee_amount = comisión + cuotas (todo junto), idéntico a lo
+    # que ML cobra. Lo guardamos como % efectivo en ml_comision_pct (= fee total
+    # ML, ya con cuotas). Se refresca en cada sync (incluido el horario) para
+    # reflejar Premium y el costo real de las cuotas sin estimar.
+    if (
+        item.get("category_id")
+        and item.get("listing_type_id")
+        and ml_price_decimal is not None
+        and ml_price_decimal > 0
+    ):
+        try:
+            _lp = ml_client.get_listing_prices(
+                db,
+                price=float(ml_price_decimal),
+                category_id=item["category_id"],
+                listing_type_id=item["listing_type_id"],
+            )
+            # El simulador desglosa: meli_percentage_fee = comisión base,
+            # financing_add_on_fee = costo de cuotas. Guardamos cada uno.
+            _details = _lp.get("sale_fee_details") or {}
+            _meli = _details.get("meli_percentage_fee")
+            _fin = _details.get("financing_add_on_fee")
+            _sale_fee = _lp.get("sale_fee_amount")
+            if _meli is not None:
+                prod.ml_comision_pct = Decimal(str(_meli)).quantize(Decimal("0.01"))
+            elif _sale_fee is not None:
+                prod.ml_comision_pct = (
+                    Decimal(str(_sale_fee)) / ml_price_decimal * Decimal("100")
+                ).quantize(Decimal("0.01"))
+            if _fin is not None:
+                prod.ml_cuotas_pct = Decimal(str(_fin)).quantize(Decimal("0.01"))
+        except Exception:
+            pass
+
     # ---- Hidratación (solo si hidratar=True) ----
     hidratado: list[str] = []
 
@@ -2727,33 +2765,7 @@ def sync_producto_from_ml(
                 prod.categoria = str(cat_name)[:80]
                 hidratado.append("categoría")
 
-        # Comisión ML real: usar /sites/MLA/listing_prices con la categoría +
-        # listing_type_id del item para obtener el sale_fee_amount exacto.
-        # Convertimos a % efectivo y guardamos. Sobrescribimos siempre (la
-        # comisión cambia con cambios de tarifa de ML, queremos data fresca).
-        if (
-            item.get("category_id")
-            and item.get("listing_type_id")
-            and ml_price_decimal is not None
-            and ml_price_decimal > 0
-        ):
-            lp = ml_client.get_listing_prices(
-                db,
-                price=float(ml_price_decimal),
-                category_id=item["category_id"],
-                listing_type_id=item["listing_type_id"],
-            )
-            sale_fee = lp.get("sale_fee_amount")
-            if sale_fee is not None:
-                try:
-                    com_pct = (
-                        Decimal(str(sale_fee)) / ml_price_decimal * Decimal("100")
-                    ).quantize(Decimal("0.01"))
-                    if prod.ml_comision_pct != com_pct:
-                        prod.ml_comision_pct = com_pct
-                        hidratado.append(f"comisión {com_pct}%")
-                except Exception:
-                    pass
+        # (la comisión/fee real del simulador ya se refresca arriba, en CADA sync)
 
         # Envío: si la publicación NO tiene free_shipping, el seller no paga
         # envío → ml_envio_fijo = 0. Si tiene free_shipping, ML no expone el

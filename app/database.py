@@ -334,6 +334,20 @@ def _apply_migrations() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
         )
         """,
+        # v20 (2026-06-12): fees REALES por venta — sale_fee (comisión + cuotas)
+        # y costo de envío del vendedor, capturados de la orden ML. Permiten
+        # mostrar el margen real por venta sin estimar.
+        """
+        ALTER TABLE ml_orders
+        ADD COLUMN IF NOT EXISTS ml_sale_fee NUMERIC(12, 2),
+        ADD COLUMN IF NOT EXISTS ml_shipping_cost NUMERIC(12, 2)
+        """,
+        # v21 (2026-06-12): costo real de cuotas por producto (del simulador ML),
+        # para que la previsión de rentabilidad refleje comisión + cuotas reales.
+        """
+        ALTER TABLE productos
+        ADD COLUMN IF NOT EXISTS ml_cuotas_pct NUMERIC(5, 2)
+        """,
     ]
     try:
         with engine.begin() as conn:

@@ -149,6 +149,10 @@ class Producto(Base):
     # Comisión real ML para esta publicación (varía por categoría + tipo).
     # Se autocompleta al sincronizar con ML via /sites/MLA/listing_prices.
     ml_comision_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    # Costo REAL de las cuotas sin interés para esta publicación, del simulador
+    # de ML (sale_fee_details.financing_add_on_fee). Se suma a la comisión para
+    # el costo total. NULL → usa el default global de cuotas como fallback.
+    ml_cuotas_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
     # Atributos crudos como ML los entrega (con value_id, value_struct, etc.).
     # Necesarios para PUSH: nos dan los IDs originales para mantener integridad
     # cuando enviamos cambios de la ficha técnica de vuelta a ML.
@@ -664,6 +668,12 @@ class MLOrder(Base):
     cantidad: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     precio_unitario: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     total_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    # Fees REALES capturados de la orden ML (para margen real por venta):
+    #   ml_sale_fee      = order_item.sale_fee → comisión + costo de cuotas (todo junto).
+    #   ml_shipping_cost = costo de envío del vendedor (/shipments/{id}/costs senders[].cost).
+    # Neto recibido = total_amount - ml_sale_fee - ml_shipping_cost.
+    ml_sale_fee: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    ml_shipping_cost: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     moneda: Mapped[str] = mapped_column(String(3), default="ARS", nullable=False)
 
     # Status de la orden en ML: "paid", "confirmed", "cancelled", "invalid",

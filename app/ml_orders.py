@@ -285,6 +285,28 @@ def _process_order_item(
     desired_stock_applied = cantidad if status in STATUS_APLICA_STOCK else 0
     delta_stock = 0
 
+    # ---- Fees REALES de la venta (para margen real por venta) ----
+    # sale_fee viene en el item (comisión + costo de cuotas, todo junto).
+    sale_fee = item_entry.get("sale_fee")
+    try:
+        sale_fee = Decimal(str(sale_fee)) if sale_fee is not None else None
+    except Exception:
+        sale_fee = None
+    # Costo real de envío del vendedor: 1 llamada extra a ML, solo si la orden
+    # es nueva o todavía no tiene el dato (backfill). Nunca rompe el sync.
+    shipping_cost = None
+    if existing is None or existing.ml_shipping_cost is None:
+        _sid = (order.get("shipping") or {}).get("id")
+        if _sid:
+            try:
+                from . import ml_client as _mlc
+                _costs = _mlc.get_shipment_costs(db, str(_sid))
+                _senders = _costs.get("senders") or []
+                if _senders and _senders[0].get("cost") is not None:
+                    shipping_cost = Decimal(str(_senders[0]["cost"]))
+            except Exception:
+                shipping_cost = None
+
     if existing is None:
         # Orden nueva
         existing = MLOrder(
@@ -297,6 +319,8 @@ def _process_order_item(
             cantidad=cantidad,
             precio_unitario=precio_unit,
             total_amount=total_amount,
+            ml_sale_fee=sale_fee,
+            ml_shipping_cost=shipping_cost,
             moneda=moneda,
             status=status,
             buyer_nickname=buyer,
@@ -313,6 +337,11 @@ def _process_order_item(
         existing.status = status
         existing.last_status_at = last_status_at
         existing.date_closed = date_closed
+        # Backfill de fees reales si la orden vieja no los tenía.
+        if existing.ml_sale_fee is None and sale_fee is not None:
+            existing.ml_sale_fee = sale_fee
+        if existing.ml_shipping_cost is None and shipping_cost is not None:
+            existing.ml_shipping_cost = shipping_cost
         # No cambiamos cantidad ni precio — ML no debería modificarlos post-paid
         action = "updated"
 
@@ -597,6 +626,55 @@ def get_sales_stats(
         "top_skus": top_skus,
         "days": days,
     }
+
+
+def ventas_con_margen(db: Session, *, limit: int = 200) -> list[dict]:
+    """
+    Ventas con MARGEN REAL, usando los fees capturados de cada orden ML:
+      neto   = total_amount - ml_sale_fee - ml_shipping_cost
+      margen = neto - (precio_costo * cantidad)
+
+    Solo órdenes pagadas/confirmadas. Las sincronizadas antes de esta feature
+    salen con tiene_fees=False hasta el próximo sync (que las completa).
+    """
+    from .models import Producto as _Producto
+    q = (
+        select(MLOrder)
+        .where(MLOrder.status.in_(("paid", "confirmed")))
+        .order_by(MLOrder.date_created.desc())
+        .limit(limit)
+    )
+    out: list[dict] = []
+    for o in db.execute(q).scalars().all():
+        total = Decimal(str(o.total_amount or 0))
+        fee = Decimal(str(o.ml_sale_fee or 0))
+        ship = Decimal(str(o.ml_shipping_cost or 0))
+        neto = total - fee - ship
+        costo = None
+        if o.producto_id:
+            prod = db.get(_Producto, o.producto_id)
+            if prod is not None and prod.precio_costo is not None:
+                costo = Decimal(str(prod.precio_costo)) * Decimal(int(o.cantidad or 1))
+        margen = (neto - costo) if costo is not None else None
+        margen_pct = None
+        if margen is not None and neto and neto != 0:
+            margen_pct = float(margen / neto * 100)
+        out.append({
+            "fecha": o.date_created,
+            "titulo": o.titulo_snapshot,
+            "sku": o.sku_snapshot,
+            "cantidad": o.cantidad,
+            "total": total,
+            "sale_fee": fee,
+            "envio": ship,
+            "neto": neto,
+            "costo": costo,
+            "margen": margen,
+            "margen_pct": margen_pct,
+            "tiene_fees": o.ml_sale_fee is not None,
+            "ml_order_id": o.ml_order_id,
+        })
+    return out
 
 
 def list_movimientos(
