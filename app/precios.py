@@ -447,7 +447,7 @@ def apply_precio_changes(
     sku_anterior: dict[str, dict] = {}  # capturamos los valores anteriores
     for c in changes:
         sku_updates.setdefault(c.sku, {})[c.campo] = c.valor_nuevo
-        sku_anterior.setdefault(c.sku, {})[c.campo] = c.valor_anterior
+        sku_anterior.setdefault(c.sku, {})[c.campo] = c.valor_actual
 
     aplicados = 0
     for sku, updates in sku_updates.items():
